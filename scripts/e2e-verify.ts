@@ -12,8 +12,9 @@ import { randomUUID } from 'node:crypto';
 import { createMcpClient } from '../src/lib/pscale.js';
 import { openDb } from '../src/lib/db.js';
 import { issueGrain } from '../src/lib/issuance.js';
-import { establish } from '../src/lib/grain.js';
-import { buildTicket } from '../src/lib/envelope.js';
+import { establish, revoke } from '../src/lib/grain.js';
+import { buildTicket, buildRevoked } from '../src/lib/envelope.js';
+import { derivePassphrase } from '../src/lib/grain-passphrase.js';
 import { runOnce } from '../src/lib/verifier.js';
 import { auditCollectiveName } from '../src/lib/audit.js';
 import { ManualDriver } from '../src/drivers/manual.js';
@@ -131,6 +132,24 @@ async function main() {
   const hasReject = auditText.includes('[ticket-rejected') && auditText.includes('reason=expired');
   check('audit log has a [ticket-rejected reason=expired]', hasReject);
   console.log(`\n  audit collective: sed:${auditColl}`);
+
+  // ── 9. Revoke the good grain → verifier revocation sweep → [ticket-rejected reason=revoked] ──
+  const revPass = derivePassphrase(SECRET, ISSUER, buyer);
+  await revoke({
+    client, pair_id: issued.pair_id, issuer_side: issued.issuer_side, passphrase: revPass,
+    revocation: buildRevoked({ at: '2026-06-04T00:00:00Z', reason: 'admin-refund' }),
+  });
+  console.log(`  revoked ${validRef}`);
+  const stats2 = await runOnce(ctx);
+  console.log('verifier stats (post-revoke):', JSON.stringify(stats2));
+  check('revocation sweep emitted exactly 1 new rejected', stats2.rejected === 1 && stats2.verified === 0, stats2);
+  const goodRows = ctx.db.prepare('SELECT decision, reason FROM verifier_decisions WHERE collective = ? AND position = ? ORDER BY id').all(`sed:${COLL}`, goodPos) as any[];
+  check(`good pos ${goodPos}: verified then rejected=revoked`, goodRows.length === 2 && goodRows[1]?.decision === 'rejected' && goodRows[1]?.reason === 'revoked', goodRows);
+  const auditText2 = await client.callTool('bsp', { agent_id: `sed:${auditColl}`, block: auditColl, spindle: null, pscale_attention: null });
+  check('audit log has [ticket-rejected reason=revoked]', auditText2.includes('[ticket-rejected') && auditText2.includes('reason=revoked'));
+  // Idempotent: a third tick writes nothing new.
+  const stats3 = await runOnce(ctx);
+  check('revocation sweep is idempotent (no new decisions)', stats3.rejected === 0 && stats3.verified === 0, stats3);
 
   console.log(`\n${failures === 0 ? 'ALL CHECKS PASSED' : failures + ' CHECK(S) FAILED'}`);
   await client.close();

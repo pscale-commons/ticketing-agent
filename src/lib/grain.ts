@@ -244,20 +244,22 @@ export type RevokeInput = {
 
 export async function revoke(input: RevokeInput): Promise<void> {
   const { client, pair_id, issuer_side, passphrase, revocation } = input;
-  // Point-write at "<side>.1": spindle length 2 → P_end = -2 → P_att = -2.
+  // Revocation is a point-write at "<side>.1" — the digit-1 child of the
+  // issuer's side. pscale is FLOOR-ANCHORED, not spindle-length-derived: on a
+  // grain the sides sit AT the floor (pscale 0), so the child is exactly one
+  // level below → pscale_attention = -1. (Passing -length(spindle) = -2 is read
+  // as a subtree write and the beach rejects the string payload with
+  // "Subtree write requires an object payload".) Works on a one-sided issuer
+  // grain — no buyer accept required, since this is a public write.
   const spindle = `${issuer_side}.1`;
   // gray:false is REQUIRED — grain curate-writes default to gray (private,
   // encrypted to both parties' published keys). A [ticket-revoked] envelope
-  // must be PUBLIC so the verifier (a third party, not a grain party) can
-  // read it. Without gray:false the beach rejects the write unless the buyer
-  // has published keys. NOTE: the grain must be fully established (buyer has
-  // accepted via pscale_grain_reach) before any curate write is permitted —
-  // a one-sided grain has only the issuer at position 9 and rejects writes.
+  // must be PUBLIC so the verifier (a third party, not a grain party) can read it.
   const result = await client.callTool('bsp', {
     agent_id: `grain:${pair_id}`,
     block: 'grain',
     spindle,
-    pscale_attention: -spindle.split('.').length,
+    pscale_attention: -1,
     content: revocation,
     secret: passphrase,
     gray: false,

@@ -38,7 +38,7 @@ A small HTTP service (Hono on Node 22) that:
 6. **Writes a public audit log** to its own beach at `verifier-audit:<yyyy-mm>` — append-only, one block per calendar month.
 7. **Handles refunds** by writing `[ticket-revoked]` envelopes onto issued grains (Stripe driver also calls the Stripe refund API).
 
-That's it. The full reference build is M0–M7 in §8 of the protocol doc; we are at M0 (skeleton).
+That's it. The full reference build is M0–M7 in §8 of the protocol doc. M0–M6 are implemented and validated end-to-end against the bsp-mcp federated substrate (issue → register → verify → audit → revoke); M7 (deploy) remains.
 
 ## What NOT to do
 
@@ -47,7 +47,7 @@ That's it. The full reference build is M0–M7 in §8 of the protocol doc; we ar
 3. **Do not add fields to grains we issue, or invent grammar beyond what §2.2 specifies.** The envelope is `[ticket face=... scope=... expires=... (optional: tier|seats|nonce)]`. `credits=` is reserved and v1 verifiers MUST reject it (§2.4 rule 8). If you reach for a new field, ask whether it belongs in the issuer's local SQLite (operational) or in the buyer's grain (canonical) — almost always the former.
 4. **Do not cache `bsp()` reads beyond a single tick window.** The verifier loop polls; cache invalidation across polls is more bugs than performance gains. The grain on the substrate is the truth.
 5. **Do not let SQLite hold ticket truth.** SQLite holds: pending purchases, idempotency keys, Stripe references, refund records, rate-limit counters. SQLite does NOT hold: who is verified, what envelopes are on which grain, who is registered in what collective. Those live on the beach. If you ever feel tempted to mirror pscale state into SQLite "for performance" — that's the inversion failure.
-6. **Do not allowlist issuers, rank issuers, or treat any agent_id as privileged.** This is a §6.2 (client) issue, but it has an analogue here: do not assume our agent is special. A frame-owner pointing `_tickets.issuer` at a different agent must Just Work, with this codebase as the reference for that other deployment.
+6. **Do not allowlist issuers, rank issuers, or treat any agent_id as privileged.** This is a §6.2 (client) issue, but it has an analogue here: do not assume our agent is special. A frame-owner pointing the collective's position-9 payway config issuer (9.1) at a different agent must Just Work, with this codebase as the reference for that other deployment.
 7. **Do not add multi-tenant SaaS features, KYC integrations, analytics dashboards, or a billing engine.** §6.3. Forks targeting specific markets can; the reference cannot.
 8. **Do not skip Stripe webhook signature verification, ever.** And do not log secrets — pino redaction is configured, keep the redaction list current.
 9. **Do not amend or skip hooks on commits.** Standard project hygiene; nothing payway-specific here.
@@ -62,33 +62,48 @@ That's it. The full reference build is M0–M7 in §8 of the protocol doc; we ar
 6. **Test against a real bsp-mcp endpoint.** Default in `config/agent.yaml.example` points at `https://bsp.hermitcrab.me/mcp/v1`. Use a dev `agent_id` for testing, not a production one.
 7. **Match the spec's milestone scope.** Don't bundle M3 work into M1. Each milestone is supposed to be independently testable.
 
-## Architecture (M0 — current state)
+## Architecture (M0–M6 implemented; M7 = deploy)
+
+Ported to and validated against the new bsp-mcp federated substrate (see the git
+log and `scripts/e2e-verify.ts`). The substrate-shape specifics are documented
+inline at each call site: bare `handle`/`partner_handle` for grain reach; the
+payway config at collective **position 9** (numbered fields), not a `_tickets`
+sibling key; registrants nest in a **digit-trie**; `[ticket-revoked]` is a
+**public** (`gray:false`) point-write at `<issuer-side>.1` with **floor-anchored
+pscale** (`-1`, not `-length(spindle)`).
 
 ```
 src/
-├── index.ts                 # entry — load env, config, db; start server; signal handlers
-├── server.ts                # Hono app factory (health endpoint only at M0)
+├── index.ts                 # entry — load env, config, db; start server + verifier; signals
+├── server.ts                # Hono app factory (catalogue, buy, webhook, admin, health)
 ├── types.ts                 # AppContext, Product, PriceConfig, Face
+├── drivers/                 # stripe (reference), gift (Ed25519), manual (bank transfer)
+├── routes/                  # catalogue, purchase, webhook, admin
 └── lib/
     ├── env.ts               # zod env validation (TICKET_AGENT_SECRET, ADMIN_TOKEN, etc.)
     ├── log.ts               # pino with secret redaction
     ├── config.ts            # YAML + zod (agent identity, products, verifier watch list)
-    └── db.ts                # SQLite open + purchases table schema
+    ├── db.ts                # SQLite — purchases + verifier_decisions tables
+    ├── envelope.ts          # [ticket ...] grammar: parse / build / round-trip
+    ├── grain.ts             # establish / walk / revoke a grain via bsp-mcp
+    ├── grain-passphrase.ts  # HMAC per-grain passphrase derivation
+    ├── pscale.ts            # tiny in-tree bsp-mcp Streamable-HTTP client
+    ├── issuance.ts          # the one issuance path shared by all drivers
+    ├── rate-limit.ts        # per-product hour/day caps from the purchases table
+    ├── verifier.ts          # eight-rule check + revocation/expiry sweeps
+    └── audit.ts             # public audit log (sed:<verifier-id>-audit-<yyyy-mm>)
 ```
 
-Future milestones add (per protocol §8):
+Milestone status (per protocol §8):
 
-- **M1**: `lib/envelope.ts`, `lib/grain.ts`, `lib/pscale.ts` (MCP client). Round-trip envelope tests.
-- **M2**: `routes/catalogue.ts` — public product list page.
-- **M3**: `drivers/stripe.ts`, `routes/purchase.ts`, `routes/webhook.ts`, `lib/rate-limit.ts`, `routes/admin.ts`.
-- **M4**: `lib/verifier.ts`, `lib/audit.ts`. Verifier worker watches configured collectives.
-- **M5**: `routes/refund.ts` — Stripe refund + grain revoke.
-- **M6**: `drivers/gift.ts`, `drivers/manual.ts`.
-- **M7**: catalogue page styling, deploy.
+- **M0–M6** — implemented and validated end-to-end against a live bsp-mcp
+  (`scripts/e2e-verify.ts`: issue → register → verify → audit → revoke). 110 unit
+  tests pass; typecheck clean.
+- **M7** (remaining): catalogue page styling, deploy.
 
 ## Storage
 
-**SQLite at `data/purchases.sqlite`** (gitignored). Single table `purchases`:
+**SQLite at `data/purchases.sqlite`** (gitignored). Two tables: `purchases` (below) and `verifier_decisions` (local record of which registrations have been processed, so the verifier never re-audits a decision). The `purchases` table:
 
 | column | purpose |
 |---|---|
@@ -105,7 +120,7 @@ Future milestones add (per protocol §8):
 
 Counts for `lib/rate-limit.ts` come from this table — `SELECT count(*) WHERE product_id = ? AND status = 'paid' AND paid_at > ?`. No separate counter table.
 
-**The substrate (pscale) holds**: the grain (with `[ticket ...]` envelope), revocations (`[ticket-revoked]`), the collective's `_tickets` field, the registration that references the grain, the `[ticket-verified]` / `[ticket-rejected]` / `[ticket-expired]` envelopes, and the public audit log at `verifier-audit:<yyyy-mm>` on this agent's own beach. None of that is mirrored in SQLite.
+**The substrate (pscale) holds**: the grain (with `[ticket ...]` envelope), revocations (`[ticket-revoked]`), the collective's position-9 payway config sub-block, the registration that references the grain, the `[ticket-verified]` / `[ticket-rejected]` / `[ticket-expired]` envelopes, and the public audit log at `verifier-audit:<yyyy-mm>` on this agent's own beach. None of that is mirrored in SQLite.
 
 ## Federation guarantees — the §6 social contract
 
@@ -115,7 +130,7 @@ These are not decoration. Anyone reviewing a PR reads them first.
 2. **Client (xstream-play, others) stays neutral.** Our buy-affordance contract (§4 of protocol) doesn't allowlist us as the canonical issuer. Our public-facing materials don't imply we are.
 3. **Reference impl stays small.** "Forkable in an afternoon." If a feature meaningfully raises self-host bar, it goes in a fork.
 4. **No protocol-level fees.** Our income (if any) is what Stripe charges and what frame-owners voluntarily pay us as a hosted-issuer service. Nothing in envelope grammar, metadata, or daemon convention takes a cut.
-5. **Interoperability invariant.** A frame-owner switches from us to another issuer with a five-minute migration: change `_tickets.issuer` and `_tickets.purchase_url`, tell their verifier to expect the new issuer's `agent_id`. Done. Existing live grains stop being honoured (because they're from us, not the new issuer); new purchases use the new path.
+5. **Interoperability invariant.** A frame-owner switches from us to another issuer with a five-minute migration: change the position-9 payway config issuer (9.1) and purchase_url (9.2), tell their verifier to expect the new issuer's `agent_id`. Done. Existing live grains stop being honoured (because they're from us, not the new issuer); new purchases use the new path.
 
 ## Lineage and relationships
 
@@ -123,7 +138,7 @@ These are not decoration. Anyone reviewing a PR reads them first.
 |---|---|---|
 | `pscale-commons/bsp-mcp-server` | The substrate (pscale geometry + bsp() + 5 primitives) | We are a *client* of bsp-mcp. We do not modify it. We use its tools via MCP. |
 | `pscale-commons/ticketing-agent` (this repo) | Reference issuer + verifier | The deployable artefact frame-owners fork. |
-| xstream-play | Reference payway-aware client | Reads our `_tickets`, surfaces buy buttons, polls for grains, performs Step A registration. We do not depend on xstream-play; the affordance contract (§4 of protocol) is fully specified. |
+| xstream-play | Reference payway-aware client | Reads our position-9 payway config, surfaces buy buttons, polls for grains, performs Step A registration. We do not depend on xstream-play; the affordance contract (§4 of protocol) is fully specified. |
 
 Coordination point with xstream-play: the grain-reference syntax used in registrations (`*:agent:X:grain:Y` per draft, to be confirmed against `protocol-block-references.md` during M1). Both sides must use the same string. Resolve here, post back.
 
@@ -136,7 +151,7 @@ From §9 of the protocol doc / build spec:
 3. **Default ticket duration units**: days. Configurable. Some frames may want hours. Land the defaults; don't over-engineer the units up front.
 4. **Grain-reference syntax**: confirm `*:agent:X:grain:Y` against `protocol-block-references.md` in M1.
 5. **Soft-LLM rate-limit per ticket vs per session**: not our problem — that's a synthesis-daemon concern on the frame-owner's host. Note it, don't solve it here.
-6. **Multi-frame season passes**: scope `beach:X` admits the holder to all `_tickets`-marked collectives on agent X's beach. Already in spec; verifier rule 4 (§2.4) handles it. Test it explicitly in M4.
+6. **Multi-frame season passes**: scope `beach:X` admits the holder to all payway-gated collectives on agent X's beach. Already in spec; verifier rule 4 (§2.4) handles it. Test it explicitly in M4.
 
 ## Security and secrets discipline
 
@@ -148,7 +163,7 @@ From §9 of the protocol doc / build spec:
 
 ## What success looks like at each milestone
 
-- **M0** (now): server boots, `/health` returns the agent identity, env+config validation rejects bad configs with clear errors. ✅
+- **M0**: server boots, `/health` returns the agent identity, env+config validation rejects bad configs with clear errors. ✅
 - **M1**: round-trip tests for every envelope shape (`[ticket]`, `[ticket-revoked]`, `[ticket-verified]`, `[ticket-rejected]`, `[ticket-expired]`); `lib/grain.ts` can establish, walk, and revoke a grain against the live bsp-mcp using a dev agent_id; grain-ref syntax confirmed.
 - **M2**: catalogue page renders all configured products with descriptions and Stripe-driven Buy links; YAML reload by restart is documented.
 - **M3**: full Stripe test-mode flow — click Buy, complete Checkout, webhook fires, grain lands on beach with correct envelope, SQLite row marked `paid`. Rate-limit caps trigger correctly when forced.
