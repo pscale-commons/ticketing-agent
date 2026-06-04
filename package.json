@@ -1,0 +1,36 @@
+{
+  "name": "ticketing-agent",
+  "version": "0.1.0",
+  "description": "Reference ticketing agent for the bsp-mcp paywall convention. A small Node/Hono service that issues ticket grains on payment and runs a verifier daemon. Forkable in an afternoon.",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test --import tsx test/**/*.test.ts",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13.0",
+    "better-sqlite3": "^11.5.0",
+    "hono": "^4.6.0",
+    "pino": "^9.5.0",
+    "pino-pretty": "^11.3.0",
+    "stripe": "^17.4.0",
+    "tweetnacl": "^1.0.3",
+    "yaml": "^2.6.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^22.9.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT"
+}

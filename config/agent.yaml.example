@@ -1,0 +1,87 @@
+# Reference ticketing agent — example configuration.
+#
+# Copy to `config/agent.yaml` and edit. Validated at startup via zod;
+# bad values fail loud rather than silently.
+
+agent:
+  # Your pscale agent_id. Anything unique that you control.
+  id: agent:example-tickets
+  # Name of the env var holding the agent secret (loaded from .env).
+  secret_env: TICKET_AGENT_SECRET
+  # bsp-mcp endpoint to issue grains and run the verifier against.
+  pscale_mcp_url: https://bsp.hermitcrab.me/mcp/v1
+
+products:
+  # ── Stripe-paid product ──
+  - id: example-character-30d
+    sed: sed:example-frame-cast
+    face: character                    # character | author | designer
+    scope: frame:example-frame         # exact | prefix-pattern (frame:foo-*) | beach:X (v2)
+    duration_days: 30
+    rate_limit:                        # optional — per protocol §3.9
+      max_per_hour: 100
+      max_per_day: 500
+    price:
+      driver: stripe
+      stripe_price_id: price_REPLACE_ME
+    description: "Play a character in the example frame for 30 days"
+
+  # ── Stripe season pass with prefix-wildcard scope ──
+  - id: example-author-90d
+    sed: sed:example-frame-authors
+    face: author
+    scope: frame:example-*             # admits any frame matching the prefix
+    duration_days: 90
+    tier: hard                         # optional — narrows or widens SMH aperture
+    rate_limit:
+      max_per_hour: 50
+      max_per_day: 200
+    price:
+      driver: stripe
+      stripe_price_id: price_REPLACE_ME
+    description: "Author content across the example world for 90 days"
+
+  # ── Free invite-only ticket — Ed25519 signature from authorised gifter ──
+  # Gifters sign:
+  #   ticket-gift:<product_id>:<buyer_agent_id>:<issued_at>:<nonce>
+  # with the Ed25519 secret behind the public key they published via
+  # pscale_key_publish (passport position 9). Default validity window: 24h.
+  - id: example-character-gift
+    sed: sed:example-frame-cast
+    face: character
+    scope: frame:example-frame
+    duration_days: 30
+    price:
+      driver: gift
+      gifters:
+        - agent:example-host           # agents authorised to mint gift signatures
+    description: "Gifted character access (free, by invitation)"
+
+  # ── Bank transfer — buyer requests instructions, operator confirms via
+  # POST /admin/mark-paid/:purchase_id once the wire arrives. ──
+  - id: example-designer-1y
+    sed: sed:example-frame-designers
+    face: designer
+    scope: frame:example-frame
+    duration_days: 365
+    tier: hard
+    price:
+      driver: manual
+      instructions: |
+        Wire €1,200 to:
+          Beneficiary: Example Frame Co.
+          IBAN: GB00 BANK 0000 0000 0000 00
+          Reference: <purchase_id from response>
+
+        Operator will confirm receipt within 1 business day.
+    description: "Designer access for one year (bank transfer)"
+
+verifier:
+  # Collectives this agent's verifier worker watches. If omitted,
+  # defaults to the union of products[].sed.
+  watch:
+    - sed:example-frame-cast
+    - sed:example-frame-authors
+    - sed:example-frame-designers
+  # Tick interval. Default 5 seconds.
+  poll_interval_seconds: 5
