@@ -37,6 +37,7 @@
 // model. The substrate is the truth; we just call through.
 
 import type { McpClient } from './pscale.js';
+import { parseWholeBlock } from './pscale.js';
 
 export type Side = '1' | '2';
 
@@ -149,21 +150,9 @@ export async function walkSide(input: WalkInput): Promise<GrainSideContent> {
 }
 
 // The whole-block read returns text starting with `[whole block]` followed
-// by a JSON-rendered block. Parse the JSON and extract the requested side.
-const WHOLE_BLOCK_PREFIX_RE = /^\s*\[whole block\]\s*/;
-
+// by a JSON-rendered block (and trailing lines — see parseWholeBlock).
 type RawBlock = Record<string, unknown>;
-
-function parseWholeBlockText(text: string): RawBlock | null {
-  const stripped = text.replace(WHOLE_BLOCK_PREFIX_RE, '');
-  const i = stripped.indexOf('{');
-  if (i === -1) return null;
-  try {
-    return JSON.parse(stripped.slice(i)) as RawBlock;
-  } catch {
-    return null;
-  }
-}
+const parseWholeBlockText = (text: string): RawBlock | null => parseWholeBlock(text);
 
 export function extractSide(wholeBlockText: string, side: Side): GrainSideContent {
   const block = parseWholeBlockText(wholeBlockText);

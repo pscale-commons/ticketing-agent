@@ -134,6 +134,7 @@ verifier:
 - `GET /admin/rate-limit/:product_id` — current rate-limit decision for a product.
 - `POST /admin/refund/:id` — Stripe refund + grain revoke. Body: `{ reason }` (no whitespace). The verifier picks up the revocation on its next tick and writes a `[ticket-rejected reason=revoked]` audit entry.
 - `POST /admin/mark-paid/:id` — operator confirms a manual (bank transfer) purchase has cleared. Issues the grain and marks the row paid. Body: `{ notes }` (optional).
+- `POST /admin/reissue/:id` — write the ticket for a purchase that was paid but whose grain failed to land (`status: failed`, e.g. bsp-mcp unreachable at the moment of payment). Marks the row paid on success. Body: `{ notes }` (optional).
 - `POST /admin/invoice` — raise a Stripe invoice for an invoice-priced product. Body: `{ product_id, buyer_agent_id, email, name?, amount_cents, description, send? }` (`amount_cents` in the currency's minor unit; `send: true` finalises and emails it, otherwise a draft waits in the dashboard).
 
 ## Driver flows

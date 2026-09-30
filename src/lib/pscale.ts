@@ -41,67 +41,82 @@ export async function createMcpClient(url: string, opts: McpClientOptions = {}):
   let nextId = 1;
   const newId = () => nextId++;
 
-  // initialize
-  const initRes = await fetchImpl(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Accept: 'application/json, text/event-stream',
-    },
-    body: JSON.stringify({
-      jsonrpc: '2.0',
-      id: newId(),
-      method: 'initialize',
-      params: { protocolVersion: PROTOCOL_VERSION, capabilities: {}, clientInfo },
-    }),
-  });
-  if (!initRes.ok) {
-    throw new McpError(`initialize failed: ${initRes.status} ${initRes.statusText}`);
-  }
-  const sessionId = initRes.headers.get('Mcp-Session-Id') ?? initRes.headers.get('mcp-session-id');
-  if (!sessionId) {
-    throw new McpError('initialize: server did not return Mcp-Session-Id');
-  }
-  const initBody = await readJsonOrEvent(initRes);
-  if (initBody.error) {
-    throw new McpError(`initialize: ${initBody.error.message}`, initBody.error.code);
+  // Open a session: initialize, then notifications/initialized. bsp-mcp holds
+  // sessions in memory, so a redeploy forgets every one of them and answers a
+  // forgotten session with 404 — the streamable-HTTP spec's signal to open a
+  // fresh one. callTool does exactly that, once, before giving up.
+  async function openSession(): Promise<string> {
+    const initRes = await fetchImpl(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: newId(),
+        method: 'initialize',
+        params: { protocolVersion: PROTOCOL_VERSION, capabilities: {}, clientInfo },
+      }),
+    });
+    if (!initRes.ok) {
+      throw new McpError(`initialize failed: ${initRes.status} ${initRes.statusText}`);
+    }
+    const sid = initRes.headers.get('Mcp-Session-Id') ?? initRes.headers.get('mcp-session-id');
+    if (!sid) {
+      throw new McpError('initialize: server did not return Mcp-Session-Id');
+    }
+    const initBody = await readJsonOrEvent(initRes);
+    if (initBody.error) {
+      throw new McpError(`initialize: ${initBody.error.message}`, initBody.error.code);
+    }
+
+    // notifications/initialized — required before tool calls
+    const notifyRes = await fetchImpl(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json, text/event-stream',
+        'Mcp-Session-Id': sid,
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'notifications/initialized',
+        params: {},
+      }),
+    });
+    // Notifications return 202 Accepted with no body.
+    if (!notifyRes.ok && notifyRes.status !== 202) {
+      throw new McpError(`notifications/initialized failed: ${notifyRes.status} ${notifyRes.statusText}`);
+    }
+    return sid;
   }
 
-  // notifications/initialized — required before tool calls
-  const notifyRes = await fetchImpl(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Accept: 'application/json, text/event-stream',
-      'Mcp-Session-Id': sessionId,
-    },
-    body: JSON.stringify({
-      jsonrpc: '2.0',
-      method: 'notifications/initialized',
-      params: {},
-    }),
-  });
-  // Notifications return 202 Accepted with no body.
-  if (!notifyRes.ok && notifyRes.status !== 202) {
-    throw new McpError(`notifications/initialized failed: ${notifyRes.status} ${notifyRes.statusText}`);
-  }
+  let sessionId = await openSession();
+
+  const call = (name: string, args: Record<string, unknown>) =>
+    fetchImpl(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json, text/event-stream',
+        'Mcp-Session-Id': sessionId,
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: newId(),
+        method: 'tools/call',
+        params: { name, arguments: args },
+      }),
+    });
 
   return {
     async callTool(name, args) {
-      const res = await fetchImpl(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json, text/event-stream',
-          'Mcp-Session-Id': sessionId,
-        },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: newId(),
-          method: 'tools/call',
-          params: { name, arguments: args },
-        }),
-      });
+      let res = await call(name, args);
+      if (res.status === 404) {
+        sessionId = await openSession();
+        res = await call(name, args);
+      }
       if (!res.ok) {
         throw new McpError(`tools/call ${name} failed: ${res.status} ${res.statusText}`);
       }
@@ -124,6 +139,27 @@ export async function createMcpClient(url: string, opts: McpClientOptions = {}):
       // we no-op to keep the surface tiny. Bsp-mcp doesn't require explicit close.
     },
   };
+}
+
+// A whole-block read answers "[whole block]", then the block as pretty-printed
+// JSON — and, since bsp-mcp #452, lines AFTER it: who else is at the block, and
+// the clock. The JSON ends at the first line that is a lone "}": a raw newline
+// cannot occur inside a JSON string, so that line can only be the top-level
+// close. A block written compactly, or empty ("{}"), is whole on its first line.
+export function parseWholeBlock(text: string): Record<string, unknown> | null {
+  const start = text.indexOf('{');
+  if (start === -1) return null;
+  const lines = text.slice(start).split('\n');
+  for (const end of [0, lines.findIndex((l) => l === '}')]) {
+    if (end < 0) continue;
+    try {
+      const v = JSON.parse(lines.slice(0, end + 1).join('\n'));
+      if (v && typeof v === 'object' && !Array.isArray(v)) return v as Record<string, unknown>;
+    } catch {
+      // not whole yet — try the next candidate end
+    }
+  }
+  return null;
 }
 
 // SSE responses come as `data: {json}\n\n`. The bsp-mcp server uses plain JSON
