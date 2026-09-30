@@ -13,6 +13,11 @@ export interface RateLimit {
 
 export interface Product {
   id: string;
+  // Bare handle this product's grains are reached from. Defaults to the
+  // agent's own id. One grain exists per (issuer, buyer) pair, so two
+  // products sold to the same buyer from one issuer would share — and
+  // overwrite — one ticket; a product with its own issuer gets its own grain.
+  issuer?: string;
   sed: string;
   face: Face;
   scope: string;
@@ -26,7 +31,10 @@ export interface Product {
 export type PriceConfig =
   | { driver: 'stripe'; stripe_price_id: string }
   | { driver: 'gift'; gifters: string[] }
-  | { driver: 'manual'; instructions?: string };
+  | { driver: 'manual'; instructions?: string }
+  // Priced per job: the operator raises a Stripe invoice (POST /admin/invoice)
+  // and the grain is issued when Stripe reports it paid.
+  | { driver: 'invoice'; currency: string; days_until_due?: number };
 
 export interface AgentConfig {
   agent: {

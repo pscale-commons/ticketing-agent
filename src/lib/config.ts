@@ -14,10 +14,16 @@ const priceSchema = z.discriminatedUnion('driver', [
   z.object({ driver: z.literal('stripe'), stripe_price_id: z.string().min(1) }),
   z.object({ driver: z.literal('gift'), gifters: z.array(z.string().min(1)).min(1) }),
   z.object({ driver: z.literal('manual'), instructions: z.string().optional() }),
+  z.object({
+    driver: z.literal('invoice'),
+    currency: z.string().regex(/^[a-z]{3}$/, 'currency is a lowercase ISO code, e.g. gbp'),
+    days_until_due: z.number().int().positive().optional(),
+  }),
 ]);
 
 const productSchema = z.object({
   id: z.string().min(1),
+  issuer: z.string().regex(/^[a-zA-Z0-9_\-]{2,64}$/, 'issuer is a bare handle').optional(),
   sed: z.string().regex(/^sed:/, 'sed must start with "sed:"'),
   face: faceSchema,
   scope: z.string().min(1),

@@ -15,6 +15,8 @@ import type {
   PaymentDriver,
   VerifyWebhookInput,
   WebhookEvent,
+  CreateInvoiceInput,
+  CreateInvoiceResult,
 } from '../src/drivers/types.js';
 import { WebhookSignatureError } from '../src/drivers/types.js';
 import type { McpClient } from '../src/lib/pscale.js';
@@ -230,6 +232,7 @@ export type FakeStripeDriver = PaymentDriver & {
   webhookEvents: Map<string, WebhookEvent>;
   createdSessions: CreateCheckoutInput[];
   refunds: CreateRefundInput[];
+  invoices: CreateInvoiceInput[];
   failNextCheckout?: Error;
   failNextRefund?: Error;
 };
@@ -238,12 +241,19 @@ export function fakeStripeDriver(): FakeStripeDriver {
   const webhookEvents = new Map<string, WebhookEvent>();
   const createdSessions: CreateCheckoutInput[] = [];
   const refunds: CreateRefundInput[] = [];
+  const invoices: CreateInvoiceInput[] = [];
 
   const driver: FakeStripeDriver = {
     webhookEvents,
     createdSessions,
     refunds,
+    invoices,
     name: 'stripe',
+    async createInvoice(input: CreateInvoiceInput): Promise<CreateInvoiceResult> {
+      invoices.push(input);
+      const driver_ref = `in_${input.purchase_id}`;
+      return { driver_ref, hosted_url: input.send ? `https://invoice.stripe.test/${driver_ref}` : null };
+    },
     async createCheckout(input: CreateCheckoutInput): Promise<CreateCheckoutResult> {
       if (driver.failNextCheckout) {
         const err = driver.failNextCheckout;

@@ -20,6 +20,7 @@
 // and the operator handles it via admin tooling.
 
 import { Hono } from 'hono';
+import { randomUUID } from 'node:crypto';
 import type { AppContext } from '../types.js';
 import type { PurchaseRow } from '../lib/db.js';
 import { WebhookSignatureError } from '../drivers/types.js';
@@ -52,6 +53,10 @@ export function webhookRoutes(ctx: AppContext): Hono {
     if (event.kind === 'ignored') {
       ctx.log.debug({ reason: event.reason }, 'stripe webhook ignored');
       return c.json({ ok: true, ignored: event.reason });
+    }
+
+    if (event.kind === 'renewal') {
+      return c.json(await renew(ctx, event));
     }
 
     const { purchase_id, driver_ref, amount_cents, currency } = event;
@@ -124,4 +129,34 @@ export function webhookRoutes(ctx: AppContext): Hono {
   });
 
   return app;
+}
+
+// A subscription's later period was paid. Each period is its own purchase
+// row (driver_ref = the invoice, so a re-delivered webhook is a no-op), and
+// issuing re-reaches the same grain: the issuer side's envelope is rewritten
+// with the new expiry, and the buyer's registration keeps citing one grain.
+async function renew(
+  ctx: AppContext,
+  event: { driver_ref: string; product_id: string; buyer_agent_id: string; amount_cents: number; currency: string },
+): Promise<Record<string, unknown>> {
+  const seen = ctx.db
+    .prepare("SELECT id FROM purchases WHERE driver = 'stripe' AND driver_ref = ?")
+    .get(event.driver_ref) as { id: string } | undefined;
+  if (seen) return { ok: true, idempotent: true };
+  const product = ctx.config.products.find((p) => p.id === event.product_id);
+  if (!product) {
+    ctx.log.error({ ...event }, 'renewal for a product no longer in config — no grain extended');
+    return { ok: true, ignored: 'unknown-product' };
+  }
+  const purchase_id = randomUUID();
+  ctx.db
+    .prepare(
+      `INSERT INTO purchases (id, product_id, buyer_agent_id, status, driver, driver_ref, created_at, notes)
+       VALUES (?, ?, ?, 'pending', 'stripe', ?, ?, 'subscription renewal')`,
+    )
+    .run(purchase_id, product.id, event.buyer_agent_id, event.driver_ref, new Date().toISOString());
+  const row = ctx.db.prepare('SELECT * FROM purchases WHERE id = ?').get(purchase_id) as PurchaseRow;
+  const result = await issueGrain({ ctx, purchase: row, product, amount_cents: event.amount_cents, currency: event.currency });
+  if (!result.ok) return { ok: true, error: 'grain_issuance_failed' };
+  return { ok: true, renewed: true, pair_id: result.pair_id };
 }
