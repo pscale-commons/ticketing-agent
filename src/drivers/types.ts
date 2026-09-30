@@ -42,6 +42,18 @@ export type WebhookEvent =
       amount_cents: number;
       currency: string;
     }
+  // An invoice made by hand in the Stripe dashboard was paid. The operator
+  // names the payer's handle in the invoice's custom field "Beach handle";
+  // the product is the one the invoice's metadata names (product_id), else
+  // the machine's only invoice-priced product.
+  | {
+      kind: 'dashboard-invoice';
+      driver_ref: string;
+      product_id: string | null;
+      buyer_agent_id: string;
+      amount_cents: number;
+      currency: string;
+    }
   | { kind: 'ignored'; reason: string };
 
 export type VerifyWebhookInput = {

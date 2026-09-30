@@ -19,6 +19,13 @@ import type {
 } from './types.js';
 import { WebhookSignatureError } from './types.js';
 
+// The invoice custom field that names the payer's handle on the beach. An
+// invoice the machine raises carries it, a customer the machine creates holds
+// it as a default (so the operator's own dashboard invoices for them carry it
+// too), and a paid invoice the machine did not raise is ticketed by it.
+export const BEACH_HANDLE_FIELD = 'Beach handle';
+const BEACH_HANDLE_RE = /^\s*beach\s*handle\s*$/i;
+
 export type StripeDriverOptions = {
   secretKey: string;
   webhookSecret: string;
@@ -111,6 +118,7 @@ export class StripeDriver implements PaymentDriver {
         email: input.email,
         ...(input.name ? { name: input.name } : {}),
         metadata: { handle: input.buyer_agent_id },
+        invoice_settings: { custom_fields: [{ name: BEACH_HANDLE_FIELD, value: input.buyer_agent_id }] },
       }));
     const invoice = await this.stripe.invoices.create({
       customer: customer.id,
@@ -119,6 +127,7 @@ export class StripeDriver implements PaymentDriver {
       currency,
       description: input.description,
       pending_invoice_items_behavior: 'exclude',
+      custom_fields: [{ name: BEACH_HANDLE_FIELD, value: input.buyer_agent_id }],
       metadata: {
         purchase_id: input.purchase_id,
         product_id: input.product.id,
@@ -172,14 +181,16 @@ export class StripeDriver implements PaymentDriver {
   }
 }
 
-// invoice.paid carries two things we act on: a raised invoice (billing_reason
-// 'manual', our purchase_id in its metadata) — treated like a completed
-// checkout — and a subscription's later period ('subscription_cycle'). The
+// invoice.paid carries three things we act on: an invoice we raised
+// (billing_reason 'manual', our purchase_id in its metadata) — treated like a
+// completed checkout; an invoice the operator made in the dashboard ('manual',
+// no purchase_id, the payer named in the "Beach handle" field); and a
+// subscription's later period ('subscription_cycle'). The
 // first period ('subscription_create') is already handled by the checkout.
 // Subscription metadata sits at invoice.subscription_details (API ≤ acacia)
 // or invoice.parent.subscription_details (basil on); the webhook endpoint's
 // own API version decides which, so read both.
-function parseInvoicePaid(invoice: Stripe.Invoice): WebhookEvent {
+export function parseInvoicePaid(invoice: Stripe.Invoice): WebhookEvent {
   const amount_cents = invoice.amount_paid ?? 0;
   const currency = (invoice.currency ?? 'usd').toLowerCase();
   const driver_ref = invoice.id ?? '';
@@ -194,9 +205,21 @@ function parseInvoicePaid(invoice: Stripe.Invoice): WebhookEvent {
     }
     return { kind: 'renewal', driver_ref, product_id: md.product_id, buyer_agent_id: md.buyer_agent_id, amount_cents, currency };
   }
-  const purchase_id = invoice.metadata?.purchase_id;
-  if (invoice.billing_reason === 'manual' && purchase_id) {
-    return { kind: 'checkout-completed', driver_ref, purchase_id, amount_cents, currency };
+  if (invoice.billing_reason === 'manual') {
+    const purchase_id = invoice.metadata?.purchase_id;
+    if (purchase_id) return { kind: 'checkout-completed', driver_ref, purchase_id, amount_cents, currency };
+    // Made by hand in the dashboard: the handle rides the "Beach handle" field.
+    const field = (invoice.custom_fields ?? []).find((f) => BEACH_HANDLE_RE.test(f.name));
+    const buyer_agent_id = (field?.value ?? invoice.metadata?.buyer_agent_id ?? '').trim();
+    if (!buyer_agent_id) return { kind: 'ignored', reason: 'invoice:manual-without-beach-handle' };
+    return {
+      kind: 'dashboard-invoice',
+      driver_ref,
+      product_id: invoice.metadata?.product_id ?? null,
+      buyer_agent_id,
+      amount_cents,
+      currency,
+    };
   }
   return { kind: 'ignored', reason: `invoice:${invoice.billing_reason ?? 'unknown'}` };
 }
