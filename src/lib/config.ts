@@ -39,6 +39,7 @@ const configSchema = z.object({
     id: z.string().regex(/^agent:/, 'agent.id must start with "agent:"'),
     secret_env: z.string().min(1),
     pscale_mcp_url: z.string().url(),
+    beach: z.string().url().optional(),
   }),
   products: z.array(productSchema).min(1),
   verifier: z
