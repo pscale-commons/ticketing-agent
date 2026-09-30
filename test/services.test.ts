@@ -151,3 +151,14 @@ test('renewal: unknown product is acknowledged and ignored', async () => {
   const body = await hook(app, 'sig:gone');
   assert.equal(body.ignored, 'unknown-product');
 });
+
+test('buy page: asks for the handle exactly and checks it against the beach it names', async () => {
+  const driver = fakeStripeDriver();
+  const ctx = fakeCtx({ stripeDriver: driver, products: [...TEST_PRODUCTS, SERVICE] });
+  ctx.config.agent.beach = 'https://beach.example.test/';
+  const html = await (await createApp(ctx).request('/buy/beach-service')).text();
+  assert.match(html, /exactly as it stands, capitals and all/);
+  assert.match(html, /autocapitalize="none"/);
+  assert.match(html, /"https:\/\/beach\.example\.test\/\.well-known\/pscale-beach"/);
+  assert.match(html, /Did you mean /);
+});

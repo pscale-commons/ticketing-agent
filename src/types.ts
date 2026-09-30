@@ -41,6 +41,9 @@ export interface AgentConfig {
     id: string;
     secret_env: string;
     pscale_mcp_url: string;
+    // The beach the grains live on and the buyers' names stand at. The buy
+    // page reads its index to catch a handle typed a letter or a capital off.
+    beach?: string;
   };
   products: Product[];
   verifier?: {

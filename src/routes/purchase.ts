@@ -23,6 +23,7 @@ import { verifyGift } from '../drivers/gift.js';
 import { issueGrain } from '../lib/issuance.js';
 
 const AGENT_ID_RE = /^[a-zA-Z0-9_:.\-]{2,128}$/;
+const DEFAULT_BEACH = 'https://beach.happyseaurchin.com';
 
 function findProduct(ctx: AppContext, id: string): Product | undefined {
   return ctx.config.products.find((p) => p.id === id);
@@ -72,7 +73,80 @@ function buyFormCopy(product: Product): { intro: string; submit: string; help: s
   }
 }
 
-function renderBuyForm(product: Product): string {
+// A slipped letter or capital sends a ticket to the wrong name, and a phone
+// capitalises a first letter unasked. So the handle box speaks one quiet line
+// when the typed name is a letter or two — or only a capital, a space or a
+// hyphen — from a name standing in MORE blocks on the beach: "Did you mean …?".
+// Never a gate; the button works as before. The measure is the one the beach's
+// own pages take (happyseaurchin-home theme.js, xstream-bsp
+// src/kernel/name-standing.ts): the last segment of every block name, so a
+// person with a shell and a pool but no passport still stands.
+function nameCheckScript(beach: string): string {
+  return `<script>
+(function(){
+  var INDEX = ${JSON.stringify(beach.replace(/\/+$/, '') + '/.well-known/pscale-beach')};
+  var box = document.getElementById('buyer_agent_id'), line = document.getElementById('near');
+  function tail(n){ return n.slice(n.lastIndexOf(':') + 1); }
+  function fold(s){ return s.toLowerCase().replace(/[\\s\\-_]/g, ''); }
+  function edits(a, b){
+    if (Math.abs(a.length - b.length) > 2) return 9;
+    var prev = [], i, j;
+    for (j = 0; j <= b.length; j++) prev.push(j);
+    for (i = 1; i <= a.length; i++){
+      var cur = [i];
+      for (j = 1; j <= b.length; j++)
+        cur.push(Math.min(prev[j] + 1, cur[j-1] + 1, prev[j-1] + (a[i-1] !== b[j-1] ? 1 : 0)));
+      prev = cur;
+    }
+    return prev[b.length];
+  }
+  function standing(blocks){
+    var m = new Map();
+    blocks.forEach(function(b){
+      if (b.indexOf(':') < 0 || /^(archive|sed|grain):/.test(b)) return;
+      var t = tail(b); m.set(t, (m.get(t) || 0) + 1);
+    });
+    return m;
+  }
+  function near(name, stand){
+    var f = fold(name), mine = stand.get(name) || 0, best = null;
+    stand.forEach(function(n, o){
+      if (o === name || n <= mine) return;
+      var same = fold(o) === f;
+      if (!same && (Math.min(name.length, o.length) < 5 || edits(f, fold(o)) > 2)) return;
+      if (!best || n > best.n) best = { name: o, n: n };
+    });
+    return best ? { name: best.name, mine: mine } : null;
+  }
+  var stand = null, asked = false;
+  function say(){
+    var name = box.value.trim();
+    var hit = stand && name.length >= 3 ? near(name, stand) : null;
+    if (!hit){ line.hidden = true; return; }
+    line.textContent = '';
+    line.appendChild(document.createTextNode(hit.mine
+      ? name + ' stands in ' + hit.mine + ' block' + (hit.mine === 1 ? '' : 's') + ' on the beach, a near name in more. Did you mean '
+      : 'Nothing stands under ' + name + ' on the beach. Did you mean '));
+    var pick = document.createElement('a');
+    pick.href = '#'; pick.textContent = hit.name;
+    pick.addEventListener('click', function(e){ e.preventDefault(); box.value = hit.name; say(); box.focus(); });
+    line.appendChild(pick);
+    line.appendChild(document.createTextNode('? Or carry on, if this name is yours.'));
+    line.hidden = false;
+  }
+  function ask(){
+    if (asked) return; asked = true;
+    fetch(INDEX, { cache: 'no-store' }).then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(ix){ if (ix && ix.blocks){ stand = standing(ix.blocks); say(); } })
+      .catch(function(){ /* the form stands without it */ });
+  }
+  box.addEventListener('focus', ask);
+  box.addEventListener('input', function(){ ask(); say(); });
+})();
+</script>`;
+}
+
+function renderBuyForm(product: Product, beach: string): string {
   const copy = buyFormCopy(product);
   return `<!doctype html>
 <html lang="en">
@@ -89,6 +163,7 @@ function renderBuyForm(product: Product): string {
     .meta dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 0.75rem; margin: 0; }
     button { margin-top: 1rem; padding: 0.6rem 1.25rem; background: #111; color: #fff; border: 0; border-radius: 4px; font-size: 1rem; cursor: pointer; }
     .help { color: #777; font-size: 0.85rem; margin-top: 0.75rem; }
+    .near { color: #8a5a00; font-size: 0.85rem; margin: 0.5rem 0 0; }
     .intro { background: #fff8e1; border-left: 3px solid #d4a017; padding: 0.75rem 1rem; margin: 1rem 0; font-size: 0.9rem; }
     a { color: #555; }
     code { background: #f0f0f0; padding: 0.1rem 0.3rem; border-radius: 3px; }
@@ -110,11 +185,13 @@ function renderBuyForm(product: Product): string {
   </div>
   ${copy.intro ? `<div class="intro">${escapeHtml(copy.intro)}</div>` : ''}
   ${product.price.driver === 'invoice' ? '' : `<form method="post" action="/buy/${encodeURIComponent(product.id)}">
-    <label for="buyer_agent_id">Your agent_id</label>
-    <input id="buyer_agent_id" name="buyer_agent_id" type="text" required pattern="[a-zA-Z0-9_:.\\-]{2,128}" placeholder="e.g. brisa" />
+    <label for="buyer_agent_id">Your handle on the beach — exactly as it stands, capitals and all. The ticket goes to that name.</label>
+    <input id="buyer_agent_id" name="buyer_agent_id" type="text" required pattern="[a-zA-Z0-9_:.\\-]{2,128}" placeholder="e.g. brisa" autocapitalize="none" autocorrect="off" spellcheck="false" />
+    <p id="near" class="near" hidden></p>
     <button type="submit">${escapeHtml(copy.submit)}</button>
     <p class="help">${copy.help}</p>
-  </form>`}
+  </form>
+  ${nameCheckScript(beach)}`}
 </body>
 </html>`;
 }
@@ -157,7 +234,7 @@ export function purchaseRoutes(ctx: AppContext): Hono {
         driver: product.price.driver,
       });
     }
-    return c.html(renderBuyForm(product));
+    return c.html(renderBuyForm(product, ctx.config.agent.beach ?? DEFAULT_BEACH));
   });
 
   app.post('/buy/:id', async (c) => {
