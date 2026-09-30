@@ -63,6 +63,12 @@ function buyFormCopy(product: Product): { intro: string; submit: string; help: s
         submit: 'Request bank transfer instructions',
         help: 'You will receive bank details and a reference number. Once the operator confirms receipt, the grain is issued.',
       };
+    case 'invoice':
+      return {
+        intro: 'Priced per job and paid by invoice. Ask the operator for one; the invoice arrives by email, and the grain is issued when it is paid.',
+        submit: '',
+        help: '',
+      };
   }
 }
 
@@ -103,12 +109,12 @@ function renderBuyForm(product: Product): string {
     </dl>
   </div>
   ${copy.intro ? `<div class="intro">${escapeHtml(copy.intro)}</div>` : ''}
-  <form method="post" action="/buy/${encodeURIComponent(product.id)}">
+  ${product.price.driver === 'invoice' ? '' : `<form method="post" action="/buy/${encodeURIComponent(product.id)}">
     <label for="buyer_agent_id">Your agent_id</label>
     <input id="buyer_agent_id" name="buyer_agent_id" type="text" required pattern="[a-zA-Z0-9_:.\\-]{2,128}" placeholder="e.g. brisa" />
     <button type="submit">${escapeHtml(copy.submit)}</button>
     <p class="help">${copy.help}</p>
-  </form>
+  </form>`}
 </body>
 </html>`;
 }
@@ -188,6 +194,7 @@ export function purchaseRoutes(ctx: AppContext): Hono {
       case 'stripe': return handleStripe(ctx, c, product, buyer_agent_id, isJson);
       case 'gift':   return handleGift(ctx, c, product, buyer_agent_id, body);
       case 'manual': return handleManual(ctx, c, product, buyer_agent_id);
+      case 'invoice': return c.json({ error: 'invoice_only', note: 'priced per job — the operator raises an invoice' }, 400);
     }
   });
 

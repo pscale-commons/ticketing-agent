@@ -478,6 +478,17 @@ async function runExpirySweep(ctx: AppContext, now: Date, stats: RunStats): Prom
 
   for (const row of rows) {
     try {
+      const renewed = await renewedExpiry(ctx, row, now);
+      if (renewed) {
+        // A subscription renewal re-reached the grain with a later expiry:
+        // carry the verified decision forward rather than expire it.
+        ctx.db
+          .prepare(
+            "UPDATE verifier_decisions SET expires_at = ? WHERE collective = ? AND position = ? AND decision = 'verified'",
+          )
+          .run(renewed, row.collective, row.position);
+        continue;
+      }
       await expireAndAudit(ctx, row, now, stats);
     } catch (err) {
       ctx.log.error(
@@ -487,6 +498,21 @@ async function runExpirySweep(ctx: AppContext, now: Date, stats: RunStats): Prom
       stats.errors++;
     }
   }
+}
+
+// The grain's current expiry when it lies beyond now (the ticket was
+// renewed since it was verified), else null.
+async function renewedExpiry(ctx: AppContext, row: VerifierDecisionRow, now: Date): Promise<string | null> {
+  if (!row.grain_ref) return null;
+  const m = GRAIN_REF_RE.exec(row.grain_ref);
+  if (!m) return null;
+  const walked = await walkGrain({ client: ctx.mcp, pair_id: m[1]! });
+  const envelope = walked.sides[m[2]! as '1' | '2'].envelope;
+  if (!envelope) return null;
+  const parsed = parseEnvelope(envelope);
+  if (isParseError(parsed) || parsed.kind !== 'ticket') return null;
+  const ms = Date.parse(parsed.expires);
+  return Number.isFinite(ms) && ms > now.getTime() ? parsed.expires : null;
 }
 
 // ── start/stop ──────────────────────────────────────────────────────────

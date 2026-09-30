@@ -20,6 +20,11 @@ function bareAgent(id: string): string {
   return id.startsWith('agent:') ? id.slice('agent:'.length) : id;
 }
 
+// The handle a product's grains are reached from (product.issuer, else the agent).
+export function issuerOf(ctx: AppContext, product: Product): string {
+  return product.issuer ?? bareAgent(ctx.config.agent.id);
+}
+
 function ticketExpiry(now: Date, duration_days: number): string {
   const expiresAt = new Date(now.getTime() + duration_days * 24 * 60 * 60 * 1000);
   return expiresAt.toISOString().replace(/\.\d+Z$/, 'Z');
@@ -42,7 +47,7 @@ export async function issueGrain(input: IssueInput): Promise<IssueResult> {
   const { ctx, purchase, product } = input;
   const now = input.now ?? new Date();
 
-  const issuer_bare = bareAgent(ctx.config.agent.id);
+  const issuer_bare = issuerOf(ctx, product);
   const buyer_bare = bareAgent(purchase.buyer_agent_id);
   const passphrase = derivePassphrase(ctx.env.TICKET_AGENT_SECRET, issuer_bare, buyer_bare);
   const envelope = buildTicket({

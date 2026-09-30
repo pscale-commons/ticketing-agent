@@ -7,13 +7,14 @@
 // All admin routes require: `Authorization: Bearer <ADMIN_TOKEN>`.
 
 import { Hono } from 'hono';
+import { randomUUID } from 'node:crypto';
 import type { AppContext } from '../types.js';
 import type { PurchaseRow } from '../lib/db.js';
 import * as rateLimit from '../lib/rate-limit.js';
 import { buildRevoked } from '../lib/envelope.js';
 import { revoke, determineSide } from '../lib/grain.js';
 import { derivePassphrase } from '../lib/grain-passphrase.js';
-import { issueGrain } from '../lib/issuance.js';
+import { issueGrain, issuerOf } from '../lib/issuance.js';
 
 function bareAgent(id: string): string {
   return id.startsWith('agent:') ? id.slice('agent:'.length) : id;
@@ -112,7 +113,8 @@ export function adminRoutes(ctx: AppContext): Hono {
     // 2. Grain revoke — only if a grain was actually issued (status === 'paid').
     let revoked = false;
     if (row.status === 'paid' && row.grain_pair_id) {
-      const issuer_bare = bareAgent(ctx.config.agent.id);
+      const product = ctx.config.products.find((p) => p.id === row.product_id);
+      const issuer_bare = product ? issuerOf(ctx, product) : bareAgent(ctx.config.agent.id);
       const buyer_bare = bareAgent(row.buyer_agent_id);
       const passphrase = derivePassphrase(ctx.env.TICKET_AGENT_SECRET, issuer_bare, buyer_bare);
       const issuer_side = determineSide(issuer_bare, buyer_bare);
@@ -177,6 +179,67 @@ export function adminRoutes(ctx: AppContext): Hono {
       revoked,
       pair_id: row.grain_pair_id,
     });
+  });
+
+  // POST /admin/invoice — raise a Stripe invoice for an invoice-priced
+  // product. Body: { product_id, buyer_agent_id, email, name?, amount_cents,
+  // description, send? }. amount_cents is in the currency's minor unit
+  // (pence for gbp). send=false (the default) leaves a draft to review and
+  // send from the Stripe dashboard; send=true finalises and emails it. The
+  // grain is issued when Stripe reports the invoice paid (invoice.paid).
+  app.post('/invoice', async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+    const product = ctx.config.products.find((p) => p.id === body.product_id);
+    if (!product) return c.json({ error: 'unknown_product' }, 404);
+    if (product.price.driver !== 'invoice') return c.json({ error: 'not_an_invoice_product' }, 400);
+    const buyer_agent_id = body.buyer_agent_id;
+    const email = body.email;
+    const amount_cents = body.amount_cents;
+    const description = body.description;
+    if (typeof buyer_agent_id !== 'string' || !/^[a-zA-Z0-9_:.\-]{2,128}$/.test(buyer_agent_id)) {
+      return c.json({ error: 'invalid_buyer_agent_id' }, 400);
+    }
+    if (typeof email !== 'string' || !/^[^@\s]+@[^@\s]+$/.test(email)) return c.json({ error: 'invalid_email' }, 400);
+    if (typeof amount_cents !== 'number' || !Number.isInteger(amount_cents) || amount_cents <= 0) {
+      return c.json({ error: 'invalid_amount_cents' }, 400);
+    }
+    if (typeof description !== 'string' || description.length === 0) return c.json({ error: 'missing_description' }, 400);
+    if (!ctx.stripeDriver?.createInvoice) return c.json({ error: 'stripe_not_configured' }, 500);
+
+    const purchase_id = randomUUID();
+    let result;
+    try {
+      result = await ctx.stripeDriver.createInvoice({
+        purchase_id,
+        product,
+        buyer_agent_id,
+        email,
+        ...(typeof body.name === 'string' && body.name ? { name: body.name } : {}),
+        amount_cents,
+        description,
+        send: body.send === true,
+      });
+    } catch (err) {
+      ctx.log.error({ err: (err as Error).message, product_id: product.id }, 'admin/invoice: stripe invoice failed');
+      return c.json({ error: 'invoice_creation_failed', reason: (err as Error).message }, 502);
+    }
+    ctx.db
+      .prepare(
+        `INSERT INTO purchases (id, product_id, buyer_agent_id, status, driver, driver_ref, created_at, amount_cents, currency, notes)
+         VALUES (?, ?, ?, 'pending', 'stripe', ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        purchase_id,
+        product.id,
+        buyer_agent_id,
+        result.driver_ref,
+        new Date().toISOString(),
+        amount_cents,
+        product.price.currency,
+        `invoice: ${description}`,
+      );
+    ctx.log.info({ purchase_id, product_id: product.id, buyer_agent_id, driver_ref: result.driver_ref }, 'admin/invoice: raised');
+    return c.json({ ok: true, purchase_id, invoice: result.driver_ref, sent: body.send === true, hosted_url: result.hosted_url });
   });
 
   // POST /admin/mark-paid/:id — operator confirms a manual (bank transfer)

@@ -383,6 +383,40 @@ test('verifier: expiry sweep writes [ticket-expired] after expires_at passes', a
   assert.match(expired!.envelope, /registration=sed:test-cast:11/);
 });
 
+test('verifier: expiry sweep carries a renewed ticket forward instead of expiring it', async () => {
+  const { ctx, mcp } = ctxWithCollective();
+  const expiresSoon = new Date(Date.now() + 60_000).toISOString().replace(/\.\d+Z$/, 'Z');
+  setUpCollective(mcp, {
+    face: 'character',
+    scope: 'frame:test',
+    issuer: 'agent:tickets-test',
+    positions: { '11': makeRegistration(`grain:${PAIR_ID}:1`) },
+  });
+  setUpGrain(mcp, {
+    issuerSide: '1',
+    envelope: buildTicket({ face: 'character', scope: 'frame:test', expires: expiresSoon }),
+  });
+  await runOnce(ctx);
+
+  // A renewal re-reaches the grain with a later expiry.
+  const renewedTo = new Date(Date.parse(expiresSoon) + 30 * 86_400_000).toISOString().replace(/\.\d+Z$/, 'Z');
+  setUpGrain(mcp, {
+    issuerSide: '1',
+    envelope: buildTicket({ face: 'character', scope: 'frame:test', expires: renewedTo }),
+  });
+  const future = new Date(Date.parse(expiresSoon) + 60_000);
+  await runOnce(ctx, future);
+
+  const expired = ctx.db
+    .prepare("SELECT 1 FROM verifier_decisions WHERE collective = ? AND position = ? AND decision = 'expired'")
+    .get(COLLECTIVE, '11');
+  assert.equal(expired, undefined);
+  const verified = ctx.db
+    .prepare("SELECT * FROM verifier_decisions WHERE collective = ? AND position = ? AND decision = 'verified'")
+    .get(COLLECTIVE, '11') as VerifierDecisionRow;
+  assert.equal(verified.expires_at, renewedTo);
+});
+
 test('verifier: collective walk failure is caught and logged', async () => {
   const { ctx, mcp } = ctxWithCollective();
   mcp.setResponse('bsp', () => {
