@@ -76,9 +76,13 @@ agent:
   id: agent:my-tickets             # any unique pscale agent_id
   secret_env: TICKET_AGENT_SECRET
   pscale_mcp_url: https://bsp.hermitcrab.me/mcp/v1
+  beach: https://beach.happyseaurchin.com   # optional: where buyers' names stand (the buy page's "did you mean …?")
 
 products:
   - id: character-30d
+    # issuer: my-frame-tickets     # optional: this product's own grain handle — one grain
+    #                              # stands per (issuer, buyer), so give each product sold
+    #                              # to the same people its own
     sed: sed:my-frame-cast
     face: character                # character | author | designer
     scope: frame:my-frame          # exact, prefix-pattern (frame:foo-*), or beach:X
@@ -90,6 +94,17 @@ products:
       driver: stripe
       stripe_price_id: price_XXX
     description: "Play a character in my frame for 30 days"
+
+  - id: consultancy                # priced per job — see "Invoice" below
+    issuer: my-consultancy-tickets
+    sed: sed:my-consultancy
+    face: designer
+    scope: beach:my.beach.host
+    duration_days: 365
+    price:
+      driver: invoice
+      currency: gbp
+    description: "Consultancy, priced per job"
 
 verifier:
   poll_interval_seconds: 5
@@ -119,12 +134,15 @@ verifier:
 - `GET /admin/rate-limit/:product_id` — current rate-limit decision for a product.
 - `POST /admin/refund/:id` — Stripe refund + grain revoke. Body: `{ reason }` (no whitespace). The verifier picks up the revocation on its next tick and writes a `[ticket-rejected reason=revoked]` audit entry.
 - `POST /admin/mark-paid/:id` — operator confirms a manual (bank transfer) purchase has cleared. Issues the grain and marks the row paid. Body: `{ notes }` (optional).
+- `POST /admin/invoice` — raise a Stripe invoice for an invoice-priced product. Body: `{ product_id, buyer_agent_id, email, name?, amount_cents, description, send? }` (`amount_cents` in the currency's minor unit; `send: true` finalises and emails it, otherwise a draft waits in the dashboard).
 
 ## Driver flows
 
 ### Stripe
 
 `product.price.driver: stripe` with `stripe_price_id`. Buyer hits POST `/buy/:product_id` with their `agent_id`; we create a Checkout Session with metadata that round-trips the purchase id and redirect them. Stripe's `checkout.session.completed` webhook signature-verifies, looks up the purchase, runs the authoritative rate-limit check, derives the per-grain passphrase from `TICKET_AGENT_SECRET`, and calls `pscale_grain_reach` on the buyer's agent_id. The grain lands; the row is marked `paid`.
+
+A recurring price makes the checkout a **subscription**: the first period is issued as above, and each later period arrives as `invoice.paid` (`subscription_cycle`) and re-reaches the same grain with a fresh expiry. Give the product a `duration_days` a few days past the billing period so a retried card never lapses a ticket. The webhook endpoint must listen for `checkout.session.completed` **and** `invoice.paid`.
 
 Refund: `POST /admin/refund/:id` with `{ reason }`. Calls `stripe.refunds.create` then writes a `[ticket-revoked]` envelope to `<issuer-side>.1` of the grain. The verifier picks this up on the next tick.
 
@@ -133,6 +151,13 @@ Refund: `POST /admin/refund/:id` with `{ reason }`. Calls `stripe.refunds.create
 `product.price.driver: gift` with `gifters: [agent:host, ...]`. The gifter has previously run `pscale_key_publish` so their public Ed25519 key sits at `passport:9.ed25519`. They sign the canonical message `ticket-gift:<product_id>:<buyer_agent_id>:<issued_at>:<nonce>` and hand the buyer the result. The buyer (or an automated client) POSTs to `/buy/:product_id` with the signed bundle. We fetch the gifter's pubkey, verify the signature, and issue the grain inline — no payment processor in the loop.
 
 The 24-hour `issued_at` window prevents replay of stale signatures; the `nonce` gives single-use semantics within the window.
+
+### Invoice
+
+`product.price.driver: invoice` with `currency` (and optional `days_until_due`, default 14): work priced per job. Two ways to raise one, both ticketed when Stripe reports the invoice paid (`invoice.paid`):
+
+- **From the machine** — `POST /admin/invoice`. The invoice carries the payer's handle in a custom field **Beach handle**, and a customer the machine creates keeps that field as a default.
+- **In the Stripe dashboard**, as you would any invoice — add a custom field named **Beach handle** holding the payer's handle, exactly as it stands on the beach. (A customer the machine created already carries it.) When it is paid, the ticket is issued for the machine's invoice product — or the product named by an invoice metadata key `product_id`, when the machine sells more than one. An invoice with no Beach handle is left alone: the money is recorded in Stripe and no ticket is written.
 
 ### Manual
 

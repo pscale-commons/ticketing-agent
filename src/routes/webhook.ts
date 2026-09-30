@@ -24,6 +24,7 @@ import { randomUUID } from 'node:crypto';
 import type { AppContext } from '../types.js';
 import type { PurchaseRow } from '../lib/db.js';
 import { WebhookSignatureError } from '../drivers/types.js';
+import type { WebhookEvent } from '../drivers/types.js';
 import * as rateLimit from '../lib/rate-limit.js';
 import { issueGrain } from '../lib/issuance.js';
 
@@ -55,8 +56,8 @@ export function webhookRoutes(ctx: AppContext): Hono {
       return c.json({ ok: true, ignored: event.reason });
     }
 
-    if (event.kind === 'renewal') {
-      return c.json(await renew(ctx, event));
+    if (event.kind === 'renewal' || event.kind === 'dashboard-invoice') {
+      return c.json(await issueForPaidInvoice(ctx, event));
     }
 
     const { purchase_id, driver_ref, amount_cents, currency } = event;
@@ -131,32 +132,53 @@ export function webhookRoutes(ctx: AppContext): Hono {
   return app;
 }
 
-// A subscription's later period was paid. Each period is its own purchase
-// row (driver_ref = the invoice, so a re-delivered webhook is a no-op), and
-// issuing re-reaches the same grain: the issuer side's envelope is rewritten
-// with the new expiry, and the buyer's registration keeps citing one grain.
-async function renew(
+// A paid invoice the machine holds no pending row for: a subscription's later
+// period (product and buyer ride the subscription's metadata), or an invoice
+// the operator made by hand in the Stripe dashboard (the buyer in its "Beach
+// handle" field; the product the one its metadata names, else the machine's
+// only invoice-priced product). Each is its own purchase row, driver_ref the
+// invoice, so a re-delivered webhook is a no-op. A renewal re-reaches the same
+// grain: the issuer side's envelope is rewritten with the new expiry, and the
+// buyer's registration keeps citing one grain.
+const HANDLE_RE = /^[a-zA-Z0-9_:.\-]{2,128}$/; // the buy form's own rule
+
+async function issueForPaidInvoice(
   ctx: AppContext,
-  event: { driver_ref: string; product_id: string; buyer_agent_id: string; amount_cents: number; currency: string },
+  event: Extract<WebhookEvent, { kind: 'renewal' | 'dashboard-invoice' }>,
 ): Promise<Record<string, unknown>> {
   const seen = ctx.db
     .prepare("SELECT id FROM purchases WHERE driver = 'stripe' AND driver_ref = ?")
     .get(event.driver_ref) as { id: string } | undefined;
   if (seen) return { ok: true, idempotent: true };
-  const product = ctx.config.products.find((p) => p.id === event.product_id);
+  const invoiceProducts = ctx.config.products.filter((p) => p.price.driver === 'invoice');
+  const product = event.product_id
+    ? ctx.config.products.find((p) => p.id === event.product_id)
+    : invoiceProducts.length === 1 ? invoiceProducts[0] : undefined;
   if (!product) {
-    ctx.log.error({ ...event }, 'renewal for a product no longer in config — no grain extended');
-    return { ok: true, ignored: 'unknown-product' };
+    const reason = event.product_id ? 'unknown-product' : 'no-single-invoice-product';
+    ctx.log.error({ ...event, reason }, 'paid invoice names no product this machine sells — no grain issued');
+    return { ok: true, ignored: reason };
+  }
+  if (!HANDLE_RE.test(event.buyer_agent_id)) {
+    ctx.log.error({ ...event }, 'paid invoice names a handle the buy form would refuse — no grain issued');
+    return { ok: true, ignored: 'invalid-beach-handle' };
   }
   const purchase_id = randomUUID();
   ctx.db
     .prepare(
       `INSERT INTO purchases (id, product_id, buyer_agent_id, status, driver, driver_ref, created_at, notes)
-       VALUES (?, ?, ?, 'pending', 'stripe', ?, ?, 'subscription renewal')`,
+       VALUES (?, ?, ?, 'pending', 'stripe', ?, ?, ?)`,
     )
-    .run(purchase_id, product.id, event.buyer_agent_id, event.driver_ref, new Date().toISOString());
+    .run(
+      purchase_id,
+      product.id,
+      event.buyer_agent_id,
+      event.driver_ref,
+      new Date().toISOString(),
+      event.kind === 'renewal' ? 'subscription renewal' : 'dashboard invoice',
+    );
   const row = ctx.db.prepare('SELECT * FROM purchases WHERE id = ?').get(purchase_id) as PurchaseRow;
   const result = await issueGrain({ ctx, purchase: row, product, amount_cents: event.amount_cents, currency: event.currency });
   if (!result.ok) return { ok: true, error: 'grain_issuance_failed' };
-  return { ok: true, renewed: true, pair_id: result.pair_id };
+  return { ok: true, ...(event.kind === 'renewal' ? { renewed: true } : { issued: true }), pair_id: result.pair_id };
 }
