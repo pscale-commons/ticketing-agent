@@ -134,7 +134,7 @@ verifier:
 - `GET /admin/rate-limit/:product_id` — current rate-limit decision for a product.
 - `POST /admin/refund/:id` — Stripe refund + grain revoke. Body: `{ reason }` (no whitespace). The verifier picks up the revocation on its next tick and writes a `[ticket-rejected reason=revoked]` audit entry.
 - `POST /admin/mark-paid/:id` — operator confirms a manual (bank transfer) purchase has cleared. Issues the grain and marks the row paid. Body: `{ notes }` (optional).
-- `POST /admin/reissue/:id` — write the ticket for a purchase that was paid but whose grain failed to land (`status: failed`, e.g. bsp-mcp unreachable at the moment of payment). Marks the row paid on success. Body: `{ notes }` (optional).
+- `POST /admin/reissue/:id` — write the ticket for a purchase that was paid but whose grain failed to land (`status: failed`, e.g. bsp-mcp unreachable at the moment of payment). Marks the row paid on success. `:id` is the purchase id or the Stripe invoice (`in_…`) / checkout session (`cs_…`); when the machine holds no row for it at all, the sale is read back from Stripe. Body: `{ notes }` (optional).
 - `POST /admin/invoice` — raise a Stripe invoice for an invoice-priced product. Body: `{ product_id, buyer_agent_id, email, name?, amount_cents, description, send? }` (`amount_cents` in the currency's minor unit; `send: true` finalises and emails it, otherwise a draft waits in the dashboard).
 
 ## Driver flows
@@ -214,6 +214,7 @@ You'll need:
 - Stripe keys (test mode is fine to start).
 - A `ADMIN_TOKEN` (long random string).
 - HTTPS in front (Stripe webhooks require it for production).
+- **`PURCHASES_DB_PATH` on persistent storage.** On a platform with ephemeral disks (Railway: `railway volume add --mount-path /data`, with `PURCHASES_DB_PATH=/data/purchases.sqlite`), a deploy without a volume wipes the purchase rows and the verifier's decisions. Stripe stays the record of every sale — a paid session or invoice whose row is gone is still ticketed from its own metadata, and `POST /admin/reissue/<in_…|cs_…>` repairs one by hand — but pending invoices, idempotency and the verifier's memory live in the database.
 
 ## Federation
 

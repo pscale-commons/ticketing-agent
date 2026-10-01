@@ -40,7 +40,7 @@ test('audit: appendDecision registers the entry (collective auto-created by regi
 
   // The old pscale_create_collective tool no longer exists — register auto-creates.
   const createCalls = mcp.calls.filter((c) => c.name === 'pscale_create_collective');
-  const registerCalls = mcp.calls.filter((c) => c.name === 'pscale_register');
+  const registerCalls = mcp.calls.filter((c) => c.name === 'pscale_settle');
   assert.equal(createCalls.length, 0, 'must not call the removed pscale_create_collective');
   assert.equal(registerCalls.length, 1);
   assert.equal(registerCalls[0]!.args.collective, 'tickets-test-audit-2026-05');
@@ -64,7 +64,7 @@ test('audit: subsequent appends in the same month register to the same collectiv
     date,
   });
   assert.equal(second.audit_position, '2');
-  const registerCalls = mcp.calls.filter((c) => c.name === 'pscale_register');
+  const registerCalls = mcp.calls.filter((c) => c.name === 'pscale_settle');
   assert.equal(registerCalls.length, 2);
   assert.ok(registerCalls.every((c) => c.args.collective === 'tickets-test-audit-2026-05'));
 });
@@ -87,7 +87,7 @@ test('audit: month rollover starts a new collective', async () => {
     envelope: '[ticket-verified by=a at=2026-06-01T00:01:00Z]',
     date: june,
   });
-  const registerCalls = mcp.calls.filter((c) => c.name === 'pscale_register');
+  const registerCalls = mcp.calls.filter((c) => c.name === 'pscale_settle');
   assert.deepEqual(
     registerCalls.map((c) => c.args.collective),
     ['tickets-test-audit-2026-05', 'tickets-test-audit-2026-06'],

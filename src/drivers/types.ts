@@ -30,6 +30,10 @@ export type WebhookEvent =
       purchase_id: string;
       amount_cents: number;
       currency: string;
+      // What the session or invoice says it sold, and to whom — so a payment
+      // whose pending row is gone (a lost database) still gets its ticket.
+      product_id?: string;
+      buyer_agent_id?: string;
     }
   // A subscription's later period was paid: extend the buyer's ticket. The
   // subscription carries product and buyer in its own metadata, so no
@@ -86,12 +90,24 @@ export type CreateInvoiceResult = {
   hosted_url: string | null; // the payer's page; null while a draft
 };
 
+// A paid (or unpaid) Stripe object read back by its id — the record the
+// operator repairs from when the machine's own row is missing.
+export type PaidLookup = {
+  paid: boolean;
+  purchase_id: string | null;
+  product_id: string | null;
+  buyer_agent_id: string | null;
+  amount_cents: number;
+  currency: string;
+};
+
 export interface PaymentDriver {
   readonly name: string;
   createCheckout(input: CreateCheckoutInput): Promise<CreateCheckoutResult>;
   verifyWebhook(input: VerifyWebhookInput): WebhookEvent;
   createRefund(input: CreateRefundInput): Promise<CreateRefundResult>;
   createInvoice?(input: CreateInvoiceInput): Promise<CreateInvoiceResult>;
+  lookupPaid?(driver_ref: string): Promise<PaidLookup | null>;
 }
 
 export class WebhookSignatureError extends Error {

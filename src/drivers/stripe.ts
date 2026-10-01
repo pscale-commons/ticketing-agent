@@ -11,6 +11,7 @@ import type {
   CreateCheckoutResult,
   CreateInvoiceInput,
   CreateInvoiceResult,
+  PaidLookup,
   CreateRefundInput,
   CreateRefundResult,
   PaymentDriver,
@@ -147,6 +148,41 @@ export class StripeDriver implements PaymentDriver {
     return { driver_ref: invoice.id!, hosted_url: sent.hosted_invoice_url ?? null };
   }
 
+  // Read a session (cs_…) or an invoice (in_…) back from Stripe: whether it is
+  // paid, and what it sold to whom — its metadata, or an invoice's Beach handle
+  // field, or a renewal's subscription metadata.
+  async lookupPaid(driver_ref: string): Promise<PaidLookup | null> {
+    if (driver_ref.startsWith('cs_')) {
+      const s = await this.stripe.checkout.sessions.retrieve(driver_ref);
+      return {
+        paid: s.payment_status === 'paid',
+        purchase_id: s.metadata?.purchase_id ?? null,
+        product_id: s.metadata?.product_id ?? null,
+        buyer_agent_id: s.metadata?.buyer_agent_id ?? null,
+        amount_cents: s.amount_total ?? 0,
+        currency: (s.currency ?? 'usd').toLowerCase(),
+      };
+    }
+    if (driver_ref.startsWith('in_')) {
+      const inv = await this.stripe.invoices.retrieve(driver_ref);
+      const loose = inv as unknown as {
+        subscription_details?: { metadata?: Record<string, string> | null } | null;
+        parent?: { subscription_details?: { metadata?: Record<string, string> | null } | null } | null;
+      };
+      const md = { ...(loose.parent?.subscription_details?.metadata ?? loose.subscription_details?.metadata ?? {}), ...(inv.metadata ?? {}) };
+      const field = (inv.custom_fields ?? []).find((f) => BEACH_HANDLE_RE.test(f.name));
+      return {
+        paid: inv.status === 'paid',
+        purchase_id: md.purchase_id ?? null,
+        product_id: md.product_id ?? null,
+        buyer_agent_id: (md.buyer_agent_id ?? field?.value ?? '').trim() || null,
+        amount_cents: inv.amount_paid ?? 0,
+        currency: (inv.currency ?? 'usd').toLowerCase(),
+      };
+    }
+    return null;
+  }
+
   verifyWebhook(input: VerifyWebhookInput): WebhookEvent {
     if (!input.signature) {
       throw new WebhookSignatureError('missing Stripe-Signature header');
@@ -177,6 +213,8 @@ export class StripeDriver implements PaymentDriver {
       purchase_id,
       amount_cents: session.amount_total ?? 0,
       currency: (session.currency ?? 'usd').toLowerCase(),
+      ...(session.metadata?.product_id ? { product_id: session.metadata.product_id } : {}),
+      ...(session.metadata?.buyer_agent_id ? { buyer_agent_id: session.metadata.buyer_agent_id } : {}),
     };
   }
 }
@@ -207,7 +245,17 @@ export function parseInvoicePaid(invoice: Stripe.Invoice): WebhookEvent {
   }
   if (invoice.billing_reason === 'manual') {
     const purchase_id = invoice.metadata?.purchase_id;
-    if (purchase_id) return { kind: 'checkout-completed', driver_ref, purchase_id, amount_cents, currency };
+    if (purchase_id) {
+      return {
+        kind: 'checkout-completed',
+        driver_ref,
+        purchase_id,
+        amount_cents,
+        currency,
+        ...(invoice.metadata?.product_id ? { product_id: invoice.metadata.product_id } : {}),
+        ...(invoice.metadata?.buyer_agent_id ? { buyer_agent_id: invoice.metadata.buyer_agent_id } : {}),
+      };
+    }
     // Made by hand in the dashboard: the handle rides the "Beach handle" field.
     const field = (invoice.custom_fields ?? []).find((f) => BEACH_HANDLE_RE.test(f.name));
     const buyer_agent_id = (field?.value ?? invoice.metadata?.buyer_agent_id ?? '').trim();

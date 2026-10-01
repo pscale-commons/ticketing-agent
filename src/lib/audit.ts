@@ -25,7 +25,9 @@
 import { createHmac } from 'node:crypto';
 import type { McpClient } from './pscale.js';
 
-// Live pscale_register ack: "Registered at sed:<collective>:<position> on <beach>."
+// Live pscale_settle ack: "Settled at sed:<collective>:<position> on <beach>."
+// (the tool was pscale_register until bsp-mcp renamed it; an unknown tool name
+// answers with text, not a failure, so the rename went unnoticed here).
 // Collective names carry no colon, so [^:\s]+ captures the name and :(\d+) the
 // position. Fall back to a generic "position: N" form for older servers.
 const POSITION_RE = /sed:[^:\s]+:(\d+)\b/;
@@ -60,20 +62,23 @@ export async function appendDecision(input: AppendInput): Promise<AppendResult> 
   const date = input.date ?? new Date();
   const collective = auditCollectiveName(input.verifier_bare_id, date);
 
-  // No explicit creation step: pscale_register auto-creates the sed: collective
+  // No explicit creation step: pscale_settle auto-creates the sed: collective
   // on first registration (the old pscale_create_collective tool no longer
   // exists on the substrate). Each entry is a registrant whose declaration is
   // the verifier envelope; the per-entry passphrase derives deterministically
   // from TICKET_AGENT_SECRET, and sed: positions are immutable post-register.
   const passphrase = deriveCollectivePassphrase(input.ticketAgentSecret, collective, 'entry');
-  const text = await input.client.callTool('pscale_register', {
+  const text = await input.client.callTool('pscale_settle', {
     collective,
     declaration: input.envelope,
     passphrase,
   });
 
+  // No position means no entry: the public log is the point of the verifier,
+  // so a failed append is an error the tick reports and retries, never a '?'.
   const positionMatch = POSITION_RE.exec(text) ?? POSITION_FALLBACK_RE.exec(text);
-  const audit_position = positionMatch?.[1] ?? '?';
+  if (!positionMatch) throw new Error(`audit append to sed:${collective} failed: ${text.slice(0, 200)}`);
+  const audit_position = positionMatch[1]!;
 
   return { audit_block: collective, audit_position };
 }

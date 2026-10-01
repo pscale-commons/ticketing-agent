@@ -7,6 +7,7 @@
 // All admin routes require: `Authorization: Bearer <ADMIN_TOKEN>`.
 
 import { Hono } from 'hono';
+import type { Context } from 'hono';
 import { randomUUID } from 'node:crypto';
 import type { AppContext } from '../types.js';
 import type { PurchaseRow } from '../lib/db.js';
@@ -14,7 +15,7 @@ import * as rateLimit from '../lib/rate-limit.js';
 import { buildRevoked } from '../lib/envelope.js';
 import { revoke, determineSide } from '../lib/grain.js';
 import { derivePassphrase } from '../lib/grain-passphrase.js';
-import { issueGrain, issuerOf } from '../lib/issuance.js';
+import { issueGrain, issuerOf, issueForPayment } from '../lib/issuance.js';
 
 function bareAgent(id: string): string {
   return id.startsWith('agent:') ? id.slice('agent:'.length) : id;
@@ -245,13 +246,16 @@ export function adminRoutes(ctx: AppContext): Hono {
   // POST /admin/reissue/:id — write the ticket for a purchase whose payment
   // was taken but whose grain never landed (status 'failed': bsp-mcp or the
   // beach could not be reached at the moment of payment). Re-runs the same
-  // issuance; on success the row is marked paid. Body (optional): { notes }.
+  // issuance; on success the row is marked paid. :id is the purchase id, or
+  // the Stripe invoice (in_…) or checkout session (cs_…) — and when the
+  // machine holds no row for it at all, the sale is read back from Stripe,
+  // which is its record. Body (optional): { notes }.
   app.post('/reissue/:id', async (c) => {
-    const purchase_id = c.req.param('id');
-    const row = ctx.db
-      .prepare('SELECT * FROM purchases WHERE id = ?')
-      .get(purchase_id) as PurchaseRow | undefined;
-    if (!row) return c.json({ error: 'not_found' }, 404);
+    const ref = c.req.param('id');
+    const row = (ctx.db.prepare('SELECT * FROM purchases WHERE id = ?').get(ref) ??
+      ctx.db.prepare("SELECT * FROM purchases WHERE driver = 'stripe' AND driver_ref = ?").get(ref)) as PurchaseRow | undefined;
+    if (!row) return reissueFromStripe(c, ref);
+    const purchase_id = row.id;
     if (row.status === 'paid') return c.json({ ok: true, idempotent: true, purchase_id, pair_id: row.grain_pair_id });
     if (row.status !== 'failed') return c.json({ error: 'not_a_failed_purchase', status: row.status }, 400);
     const product = ctx.config.products.find((p) => p.id === row.product_id);
@@ -269,6 +273,35 @@ export function adminRoutes(ctx: AppContext): Hono {
     ctx.log.info({ purchase_id, product_id: product.id, pair_id: result.pair_id }, 'admin/reissue: ticket written');
     return c.json({ ok: true, purchase_id, pair_id: result.pair_id, issuer_side: result.issuer_side });
   });
+
+  async function reissueFromStripe(c: Context, ref: string): Promise<Response> {
+    if (!/^(in|cs)_/.test(ref) || !ctx.stripeDriver?.lookupPaid) return c.json({ error: 'not_found' }, 404);
+    let found;
+    try {
+      found = await ctx.stripeDriver.lookupPaid(ref);
+    } catch (err) {
+      ctx.log.error({ ref, err: (err as Error).message }, 'admin/reissue: stripe lookup failed');
+      return c.json({ error: 'stripe_lookup_failed', reason: (err as Error).message }, 502);
+    }
+    if (!found) return c.json({ error: 'not_found' }, 404);
+    if (!found.paid) return c.json({ error: 'not_paid' }, 400);
+    if (!found.buyer_agent_id) return c.json({ error: 'no_beach_handle' }, 400);
+    const body = (await c.req.json().catch(() => ({}))) as { notes?: unknown };
+    const r = await issueForPayment(ctx, {
+      ...(found.purchase_id ? { purchase_id: found.purchase_id } : {}),
+      driver_ref: ref,
+      product_id: found.product_id,
+      buyer_agent_id: found.buyer_agent_id,
+      amount_cents: found.amount_cents,
+      currency: found.currency,
+      note: `reissued ${nowIso(new Date())} from Stripe ${ref}` +
+        (typeof body.notes === 'string' && body.notes ? ` — ${body.notes}` : ''),
+    });
+    if ('ignored' in r) return c.json({ error: r.ignored }, 400);
+    if ('error' in r) return c.json(r, 502);
+    ctx.log.info({ ref, purchase_id: r.purchase_id, pair_id: r.pair_id }, 'admin/reissue: ticket written from Stripe');
+    return c.json(r);
+  }
 
   // POST /admin/mark-paid/:id — operator confirms a manual (bank transfer)
   // payment and the agent issues the grain. Body (optional): { "notes": "..." }.

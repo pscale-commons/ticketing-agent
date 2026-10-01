@@ -13,6 +13,7 @@
 import { derivePassphrase } from './grain-passphrase.js';
 import { buildTicket } from './envelope.js';
 import { establish } from './grain.js';
+import { randomUUID } from 'node:crypto';
 import type { AppContext, Product } from '../types.js';
 import type { PurchaseRow } from './db.js';
 
@@ -107,3 +108,67 @@ export async function issueGrain(input: IssueInput): Promise<IssueResult> {
     return { ok: false, reason: (err as Error).message };
   }
 }
+
+// A payment the machine holds no pending row for: a subscription's later
+// period (product and buyer ride the subscription's metadata), an invoice the
+// operator made by hand in the Stripe dashboard (the buyer in its "Beach
+// handle" field; the product its metadata names, else the machine's only
+// invoice-priced product), or any sale whose row was lost — Stripe is the
+// record of the sale, so its metadata is enough. Each becomes its own purchase
+// row, keyed by the original purchase id when Stripe carries one, and is
+// idempotent on driver_ref: a re-delivered webhook, or a repair run twice,
+// writes nothing new. A renewal re-reaches the same grain with a new expiry.
+const HANDLE_RE = /^[a-zA-Z0-9_:.\-]{2,128}$/; // the buy form's own rule
+
+export type PaymentInput = {
+  purchase_id?: string;
+  driver_ref: string;
+  product_id: string | null;
+  buyer_agent_id: string;
+  amount_cents: number;
+  currency: string;
+  note: string;
+};
+
+export type PaymentResult =
+  | { ok: true; issued: true; purchase_id: string; pair_id: string }
+  | { ok: true; idempotent: true; purchase_id: string; pair_id: string | null }
+  | { ok: true; ignored: string }
+  | { ok: true; error: 'grain_issuance_failed'; reason: string };
+
+export async function issueForPayment(ctx: AppContext, p: PaymentInput): Promise<PaymentResult> {
+  const seen = ctx.db
+    .prepare("SELECT id, status, grain_pair_id FROM purchases WHERE driver = 'stripe' AND driver_ref = ?")
+    .get(p.driver_ref) as { id: string; status: string; grain_pair_id: string | null } | undefined;
+  if (seen && seen.status === 'paid') return { ok: true, idempotent: true, purchase_id: seen.id, pair_id: seen.grain_pair_id };
+  const invoiceProducts = ctx.config.products.filter((x) => x.price.driver === 'invoice');
+  const product = p.product_id
+    ? ctx.config.products.find((x) => x.id === p.product_id)
+    : invoiceProducts.length === 1 ? invoiceProducts[0] : undefined;
+  if (!product) {
+    const reason = p.product_id ? 'unknown-product' : 'no-single-invoice-product';
+    ctx.log.error({ ...p, reason }, 'payment names no product this machine sells — no grain issued');
+    return { ok: true, ignored: reason };
+  }
+  if (!HANDLE_RE.test(p.buyer_agent_id)) {
+    ctx.log.error({ ...p }, 'payment names a handle the buy form would refuse — no grain issued');
+    return { ok: true, ignored: 'invalid-beach-handle' };
+  }
+  let purchase_id = seen?.id;
+  if (!purchase_id) {
+    purchase_id = p.purchase_id && !ctx.db.prepare('SELECT 1 FROM purchases WHERE id = ?').get(p.purchase_id) ? p.purchase_id : randomUUID();
+    ctx.db
+      .prepare(
+        `INSERT INTO purchases (id, product_id, buyer_agent_id, status, driver, driver_ref, created_at, amount_cents, currency, notes)
+         VALUES (?, ?, ?, 'pending', 'stripe', ?, ?, ?, ?, ?)`,
+      )
+      .run(purchase_id, product.id, p.buyer_agent_id, p.driver_ref, new Date().toISOString(), p.amount_cents, p.currency, p.note);
+  } else {
+    ctx.db.prepare('UPDATE purchases SET notes = ? WHERE id = ?').run(p.note, purchase_id);
+  }
+  const row = ctx.db.prepare('SELECT * FROM purchases WHERE id = ?').get(purchase_id) as PurchaseRow;
+  const result = await issueGrain({ ctx, purchase: row, product, amount_cents: p.amount_cents, currency: p.currency });
+  if (!result.ok) return { ok: true, error: 'grain_issuance_failed', reason: result.reason };
+  return { ok: true, issued: true, purchase_id, pair_id: result.pair_id };
+}
+
