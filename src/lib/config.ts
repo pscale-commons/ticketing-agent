@@ -30,6 +30,7 @@ const productSchema = z.object({
   duration_days: z.number().int().positive(),
   title: z.string().min(1).optional(),
   register_buyer: z.boolean().optional(),
+  bank_transfer: z.boolean().optional(),
   tier: z.enum(['soft', 'medium', 'hard']).optional(),
   rate_limit: rateLimitSchema.optional(),
   price: priceSchema,
