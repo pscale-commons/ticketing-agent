@@ -35,8 +35,8 @@ import type {
   WebhookEvent,
 } from './types.js';
 import type { McpClient } from '../lib/pscale.js';
+import { parseWholeBlock } from '../lib/pscale.js';
 
-const WHOLE_BLOCK_PREFIX_RE = /^\s*\[whole block\]\s*/;
 const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
 
 export const GIFT_WINDOW_MS_DEFAULT = 24 * 60 * 60 * 1000;
@@ -87,15 +87,8 @@ async function fetchEd25519Pubkey(client: McpClient, gifter_bare_id: string): Pr
     spindle: null,
     pscale_attention: null,
   });
-  const stripped = text.replace(WHOLE_BLOCK_PREFIX_RE, '');
-  const i = stripped.indexOf('{');
-  if (i === -1) return null;
-  let block: Record<string, unknown>;
-  try {
-    block = JSON.parse(stripped.slice(i)) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
+  const block = parseWholeBlock(text);
+  if (!block) return null;
   const keys = block['9'];
   if (typeof keys !== 'object' || keys === null) return null;
   const ed = (keys as Record<string, unknown>).ed25519;

@@ -242,6 +242,34 @@ export function adminRoutes(ctx: AppContext): Hono {
     return c.json({ ok: true, purchase_id, invoice: result.driver_ref, sent: body.send === true, hosted_url: result.hosted_url });
   });
 
+  // POST /admin/reissue/:id — write the ticket for a purchase whose payment
+  // was taken but whose grain never landed (status 'failed': bsp-mcp or the
+  // beach could not be reached at the moment of payment). Re-runs the same
+  // issuance; on success the row is marked paid. Body (optional): { notes }.
+  app.post('/reissue/:id', async (c) => {
+    const purchase_id = c.req.param('id');
+    const row = ctx.db
+      .prepare('SELECT * FROM purchases WHERE id = ?')
+      .get(purchase_id) as PurchaseRow | undefined;
+    if (!row) return c.json({ error: 'not_found' }, 404);
+    if (row.status === 'paid') return c.json({ ok: true, idempotent: true, purchase_id, pair_id: row.grain_pair_id });
+    if (row.status !== 'failed') return c.json({ error: 'not_a_failed_purchase', status: row.status }, 400);
+    const product = ctx.config.products.find((p) => p.id === row.product_id);
+    if (!product) return c.json({ error: 'unknown_product' }, 400);
+
+    const body = (await c.req.json().catch(() => ({}))) as { notes?: unknown };
+    const note =
+      `reissued ${nowIso(new Date())} after: ${row.notes ?? 'failed'}` +
+      (typeof body.notes === 'string' && body.notes ? ` — ${body.notes}` : '');
+    ctx.db.prepare('UPDATE purchases SET notes = ? WHERE id = ?').run(note, purchase_id);
+    const fresh = ctx.db.prepare('SELECT * FROM purchases WHERE id = ?').get(purchase_id) as PurchaseRow;
+
+    const result = await issueGrain({ ctx, purchase: fresh, product });
+    if (!result.ok) return c.json({ error: 'grain_issuance_failed', reason: result.reason }, 502);
+    ctx.log.info({ purchase_id, product_id: product.id, pair_id: result.pair_id }, 'admin/reissue: ticket written');
+    return c.json({ ok: true, purchase_id, pair_id: result.pair_id, issuer_side: result.issuer_side });
+  });
+
   // POST /admin/mark-paid/:id — operator confirms a manual (bank transfer)
   // payment and the agent issues the grain. Body (optional): { "notes": "..." }.
   app.post('/mark-paid/:id', async (c) => {

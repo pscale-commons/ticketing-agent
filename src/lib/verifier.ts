@@ -24,6 +24,7 @@
 
 import { parseEnvelope, isParseError, buildVerified, buildRejected, buildExpired } from './envelope.js';
 import { walkGrain } from './grain.js';
+import { parseWholeBlock } from './pscale.js';
 import { appendDecision } from './audit.js';
 import type { AppContext } from '../types.js';
 import type { VerifierDecisionRow } from './db.js';
@@ -123,17 +124,7 @@ function parseTicketsMeta(config: unknown): TicketsMeta | null {
   return meta;
 }
 
-const WHOLE_BLOCK_PREFIX_RE = /^\s*\[whole block\]\s*/;
-function parseWholeBlockText(text: string): Record<string, unknown> | null {
-  const stripped = text.replace(WHOLE_BLOCK_PREFIX_RE, '');
-  const i = stripped.indexOf('{');
-  if (i === -1) return null;
-  try {
-    return JSON.parse(stripped.slice(i)) as Record<string, unknown>;
-  } catch {
-    return null;
-  }
-}
+const parseWholeBlockText = (text: string): Record<string, unknown> | null => parseWholeBlock(text);
 
 // ── runOnce ──────────────────────────────────────────────────────────────
 
