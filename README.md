@@ -109,6 +109,17 @@ products:
       stripe_price_id: price_XXX
     description: "Back the beach with £50, once"
 
+  - id: founders                   # any amount: the amount picks the list
+    sed: "sed:founders{pscale}"    # {pscale} = the place-value of the sum's first digit
+    register_buyer: true           #   (£50 → founders1, £500 → founders2, £1,000 → founders3)
+    bank_transfer: true            # offer a Stripe bank transfer beside the card: each payer
+                                   # gets a virtual account; the money is matched when it lands
+                                   # (checkout.session.async_payment_succeeded). Asks the email.
+    price:
+      driver: stripe
+      stripe_price_id: price_XXX   # a price with custom_unit_amount (pay what you want)
+    # …issuer, face, scope, duration_days, title, description as above
+
   - id: consultancy                # priced per job — see "Invoice" below
     issuer: my-consultancy-tickets
     sed: sed:my-consultancy
@@ -157,7 +168,7 @@ verifier:
 
 `product.price.driver: stripe` with `stripe_price_id`. Buyer hits POST `/buy/:product_id` with their `agent_id`; we create a Checkout Session with metadata that round-trips the purchase id and redirect them. Stripe's `checkout.session.completed` webhook signature-verifies, looks up the purchase, runs the authoritative rate-limit check, derives the per-grain passphrase from `TICKET_AGENT_SECRET`, and calls `pscale_grain_reach` on the buyer's agent_id. The grain lands; the row is marked `paid`.
 
-A recurring price makes the checkout a **subscription**: the first period is issued as above, and each later period arrives as `invoice.paid` (`subscription_cycle`) and re-reaches the same grain with a fresh expiry. Give the product a `duration_days` a few days past the billing period so a retried card never lapses a ticket. The webhook endpoint must listen for `checkout.session.completed` **and** `invoice.paid`.
+A recurring price makes the checkout a **subscription**: the first period is issued as above, and each later period arrives as `invoice.paid` (`subscription_cycle`) and re-reaches the same grain with a fresh expiry. Give the product a `duration_days` a few days past the billing period so a retried card never lapses a ticket. The webhook endpoint must listen for `checkout.session.completed` **and** `invoice.paid` — and, for a product that offers a bank transfer, `checkout.session.async_payment_succeeded` (a transfer completes the checkout unpaid and pays when the money lands). Until Stripe has switched bank transfers on for the account, such a product's checkout falls back to card.
 
 Refund: `POST /admin/refund/:id` with `{ reason }`. Calls `stripe.refunds.create` then writes a `[ticket-revoked]` envelope to `<issuer-side>.1` of the grain. The verifier picks this up on the next tick.
 

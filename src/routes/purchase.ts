@@ -248,10 +248,48 @@ function renderBuyForm(product: Product, beach: string): string {
       : 'Your handle on the beach — exactly as it stands, capitals and all. The ticket goes to that name.'}</label>
     <input id="buyer_agent_id" name="buyer_agent_id" type="text" required pattern="[a-zA-Z0-9_:.\\-]{2,128}" placeholder="e.g. brisa" autocapitalize="none" autocorrect="off" spellcheck="false" />
     <p id="near" class="near" hidden></p>
+    ${product.bank_transfer ? emailField() : ''}
     <button type="submit">${escapeHtml(copy.submit)}</button>
     <p class="help">${copy.help}</p>
   </form>
   ${forCharacter(product) ? characterCheckScript(beach) : nameCheckScript(beach)}`}
+</body>
+</html>`;
+}
+
+const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+
+function emailField(): string {
+  return `<label for="email">Your email — Stripe sends your receipt here, and can give you bank transfer details if you would rather pay that way than by card.</label>
+    <input id="email" name="email" type="email" required autocomplete="email" />`;
+}
+
+// A product that offers a bank transfer needs the payer's email before
+// checkout. Someone arriving with only a handle (from a page with a handle
+// box alone) is asked for it here, in one step, and carries on.
+function renderEmailStep(product: Product, buyer_agent_id: string): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>${escapeHtml(product.title ?? product.id)}</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 36rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
+    label { display: block; margin: 1rem 0 0.25rem; font-size: 0.9rem; color: #555; }
+    input { width: 100%; padding: 0.5rem; font-size: 1rem; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+    button { margin-top: 1rem; padding: 0.6rem 1.25rem; background: #111; color: #fff; border: 0; border-radius: 4px; font-size: 1rem; cursor: pointer; }
+    .who { color: #555; }
+  </style>
+</head>
+<body>
+  <h1>${escapeHtml(product.title ?? product.id)}</h1>
+  <p class="who">For <strong>${escapeHtml(buyer_agent_id)}</strong>.</p>
+  <form method="post" action="/buy/${encodeURIComponent(product.id)}">
+    <input type="hidden" name="buyer_agent_id" value="${escapeHtml(buyer_agent_id)}" />
+    ${emailField()}
+    <button type="submit">Continue to payment</button>
+  </form>
 </body>
 </html>`;
 }
@@ -329,7 +367,12 @@ export function purchaseRoutes(ctx: AppContext): Hono {
     }
 
     switch (product.price.driver) {
-      case 'stripe': return handleStripe(ctx, c, product, buyer_agent_id, isJson);
+      case 'stripe': {
+        const email = typeof body.email === 'string' ? body.email.trim() : '';
+        if (email && !EMAIL_RE.test(email)) return c.json({ error: 'invalid_email' }, 400);
+        if (product.bank_transfer && !email && !isJson) return c.html(renderEmailStep(product, buyer_agent_id));
+        return handleStripe(ctx, c, product, buyer_agent_id, isJson, email || undefined);
+      }
       case 'gift':   return handleGift(ctx, c, product, buyer_agent_id, body);
       case 'manual': return handleManual(ctx, c, product, buyer_agent_id);
       case 'invoice': return c.json({ error: 'invoice_only', note: 'priced per job — the operator raises an invoice' }, 400);
@@ -344,6 +387,8 @@ export function purchaseRoutes(ctx: AppContext): Hono {
         'Payment received',
         forCharacter(product)
           ? 'Thanks — your seat is on its way. In a minute it shows beside your character at happyseaurchin.com/models, and the world keeps moving for the beats it covers. You can close this tab.'
+          : product.bank_transfer
+          ? 'Thanks. If you paid by card, your ticket arrives on the beach shortly. If you chose a bank transfer, send it with the details Stripe gave you: your ticket arrives when the money lands. You can close this tab.'
           : 'Thanks. Your ticket grain will arrive on the substrate shortly. You can close this tab.',
         product.id,
       ),
@@ -371,6 +416,7 @@ async function handleStripe(
   product: Product,
   buyer_agent_id: string,
   isJson: boolean,
+  email?: string,
 ): Promise<Response> {
   if (product.price.driver !== 'stripe') throw new Error('handleStripe called with wrong driver');
   if (!ctx.stripeDriver) {
@@ -388,6 +434,7 @@ async function handleStripe(
       purchase_id,
       product,
       buyer_agent_id,
+      ...(email ? { email } : {}),
       success_url: `${ctx.env.PUBLIC_URL}/buy/${encodeURIComponent(product.id)}/success?purchase=${purchase_id}`,
       cancel_url: `${ctx.env.PUBLIC_URL}/buy/${encodeURIComponent(product.id)}/cancel?purchase=${purchase_id}`,
     });

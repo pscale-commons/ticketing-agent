@@ -32,6 +32,7 @@ const productSchema = z.object({
   register_buyer: z.boolean().optional(),
   list_block: z.string().regex(/^[a-z0-9][a-z0-9:\-]{1,127}$/, 'list_block is a block name').optional(),
   buyer: z.enum(['handle', 'character']).optional(),
+  bank_transfer: z.boolean().optional(),
   tier: z.enum(['soft', 'medium', 'hard']).optional(),
   rate_limit: rateLimitSchema.optional(),
   price: priceSchema,

@@ -18,6 +18,9 @@ export interface Product {
   // products sold to the same buyer from one issuer would share — and
   // overwrite — one ticket; a product with its own issuer gets its own grain.
   issuer?: string;
+  // The product's collective. A register_buyer product may write "{pscale}"
+  // in it (sed:founders{pscale}): the list is then chosen by the amount paid,
+  // the place-value of its first digit — £50 → 1, £500 → 2, £1,000 → 3.
   sed: string;
   face: Face;
   scope: string;
@@ -42,6 +45,11 @@ export interface Product {
   // character at a world's tables — a seat — whose form asks for the
   // character, looks for it at the tables, and keeps the machinery out of sight.
   buyer?: 'handle' | 'character';
+  // Offer a bank transfer beside the card: Stripe gives each payer a virtual
+  // account of its own and matches the money when it lands, so the operator's
+  // own bank details are never shown. Needs the payer's email before checkout;
+  // until Stripe switches bank transfers on for the account, checkout is card.
+  bank_transfer?: boolean;
 }
 
 export type PriceConfig =
