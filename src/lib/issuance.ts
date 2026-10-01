@@ -99,7 +99,7 @@ export async function issueGrain(input: IssueInput): Promise<IssueResult> {
       'grain issued',
     );
     const registered = product.register_buyer
-      ? await registerBuyer(ctx, product, buyer_bare, input.line, now, purchase.id)
+      ? await registerBuyer(ctx, product, buyer_bare, input.line, now, purchase.id, input.amount_cents ?? purchase.amount_cents ?? undefined)
       : undefined;
     return { ok: true, pair_id: grain.pair_id, issuer_side: grain.issuer_side, envelope, ...(registered ? { registered } : {}) };
   } catch (err) {
@@ -190,8 +190,13 @@ async function registerBuyer(
   line: string | undefined,
   now: Date,
   purchase_id: string,
+  amount_cents?: number,
 ): Promise<string | undefined> {
-  const collective = product.sed.replace(/^sed:/, '');
+  if (product.sed.includes('{pscale}') && !(amount_cents && amount_cents >= 100)) {
+    ctx.log.error({ purchase_id, product_id: product.id, buyer }, 'list chosen by amount, but no amount — write the entry by hand');
+    return undefined;
+  }
+  const collective = product.sed.replace(/^sed:/, '').replace('{pscale}', String(pscaleOf(amount_cents ?? 0)));
   const date = now.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
   const declaration = `${buyer} — ${date}` + (line ? ` — \u201c${line}\u201d` : '');
   try {
@@ -208,5 +213,11 @@ async function registerBuyer(
     ctx.log.error({ purchase_id, product_id: product.id, buyer, err: (err as Error).message }, 'list entry FAILED — ticket stands; write it by hand');
     return undefined;
   }
+}
+
+// The place-value of a sum's first digit, in whole pounds: £50 → 1, £500 → 2,
+// £1,000 → 3. A sum is already a pscale number; this reads its scale.
+export function pscaleOf(amount_cents: number): number {
+  return String(Math.floor(amount_cents / 100)).length - 1;
 }
 

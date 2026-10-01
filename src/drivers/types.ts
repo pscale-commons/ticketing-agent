@@ -16,6 +16,7 @@ export type CreateCheckoutInput = {
   buyer_agent_id: string;
   success_url: string;
   cancel_url: string;
+  email?: string; // the payer, as a Stripe customer — what a bank transfer needs
 };
 
 export type CreateCheckoutResult = {
