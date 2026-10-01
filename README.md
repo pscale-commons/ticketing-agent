@@ -95,6 +95,20 @@ products:
       stripe_price_id: price_XXX
     description: "Play a character in my frame for 30 days"
 
+  - id: founders1                  # a public list of backers, one per tier
+    title: "Founding supporter — £50" # the buy page's heading (default: the id)
+    issuer: founder-tickets
+    sed: sed:founders1             # the list: one entry per paid buyer
+    face: author
+    scope: frame:founders1
+    duration_days: 36500           # shown as "for good"
+    register_buyer: true           # on payment, settle the buyer into `sed` with the
+                                   # date and an optional line asked for at checkout
+    price:
+      driver: stripe
+      stripe_price_id: price_XXX
+    description: "Back the beach with £50, once"
+
   - id: consultancy                # priced per job — see "Invoice" below
     issuer: my-consultancy-tickets
     sed: sed:my-consultancy

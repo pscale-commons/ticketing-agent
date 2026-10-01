@@ -28,6 +28,8 @@ const productSchema = z.object({
   face: faceSchema,
   scope: z.string().min(1),
   duration_days: z.number().int().positive(),
+  title: z.string().min(1).optional(),
+  register_buyer: z.boolean().optional(),
   tier: z.enum(['soft', 'medium', 'hard']).optional(),
   rate_limit: rateLimitSchema.optional(),
   price: priceSchema,

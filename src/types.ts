@@ -26,6 +26,12 @@ export interface Product {
   rate_limit?: RateLimit;
   price: PriceConfig;
   description: string;
+  // The buy page's heading; the product id when absent.
+  title?: string;
+  // A paid buyer is written into the product's sed: collective — the
+  // product's public list (founding supporters) — with the date and an
+  // optional line of their own, asked for at checkout.
+  register_buyer?: boolean;
 }
 
 export type PriceConfig =

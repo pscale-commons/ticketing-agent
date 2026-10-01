@@ -67,6 +67,17 @@ export class StripeDriver implements PaymentDriver {
       cancel_url: input.cancel_url,
       metadata,
       ...(recurring ? { subscription_data: { metadata } } : {}),
+      ...(input.product.register_buyer
+        ? {
+            custom_fields: [{
+              key: 'line',
+              label: { type: 'custom' as const, custom: 'A line for the founders list (optional)' },
+              type: 'text' as const,
+              optional: true,
+              text: { maximum_length: 140 },
+            }],
+          }
+        : {}),
       // Stripe ties the payment to a customer email if supplied; for M3 we omit it.
     });
     if (!session.url) {
@@ -215,6 +226,7 @@ export class StripeDriver implements PaymentDriver {
       currency: (session.currency ?? 'usd').toLowerCase(),
       ...(session.metadata?.product_id ? { product_id: session.metadata.product_id } : {}),
       ...(session.metadata?.buyer_agent_id ? { buyer_agent_id: session.metadata.buyer_agent_id } : {}),
+      ...(lineOf(session) ? { line: lineOf(session) } : {}),
     };
   }
 }
@@ -270,4 +282,12 @@ export function parseInvoicePaid(invoice: Stripe.Invoice): WebhookEvent {
     };
   }
   return { kind: 'ignored', reason: `invoice:${invoice.billing_reason ?? 'unknown'}` };
+}
+
+// The buyer's own line, asked for at checkout by a register_buyer product:
+// one line, trimmed, its newlines folded to spaces.
+function lineOf(session: Stripe.Checkout.Session): string | undefined {
+  const v = session.custom_fields?.find((f) => f.key === 'line')?.text?.value;
+  const line = (v ?? '').replace(/\s+/g, ' ').trim();
+  return line || undefined;
 }

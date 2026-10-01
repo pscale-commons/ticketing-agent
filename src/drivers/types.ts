@@ -34,6 +34,8 @@ export type WebhookEvent =
       // whose pending row is gone (a lost database) still gets its ticket.
       product_id?: string;
       buyer_agent_id?: string;
+      // The buyer's own line for the list a register_buyer product keeps.
+      line?: string;
     }
   // A subscription's later period was paid: extend the buyer's ticket. The
   // subscription carries product and buyer in its own metadata, so no
