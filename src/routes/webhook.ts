@@ -137,7 +137,7 @@ export function webhookRoutes(ctx: AppContext): Hono {
       return c.json({ ok: true, rate_limited: true });
     }
 
-    const result = await issueGrain({ ctx, purchase: row, product, amount_cents, currency });
+    const result = await issueGrain({ ctx, purchase: row, product, amount_cents, currency, ...(event.line ? { line: event.line } : {}) });
     if (!result.ok) {
       // issueGrain has already marked the row failed and logged.
       return c.json({ ok: true, error: 'grain_issuance_failed' });

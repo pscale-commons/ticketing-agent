@@ -13,6 +13,7 @@
 import { derivePassphrase } from './grain-passphrase.js';
 import { buildTicket } from './envelope.js';
 import { establish } from './grain.js';
+import { deriveCollectivePassphrase } from './audit.js';
 import { randomUUID } from 'node:crypto';
 import type { AppContext, Product } from '../types.js';
 import type { PurchaseRow } from './db.js';
@@ -38,10 +39,11 @@ export type IssueInput = {
   amount_cents?: number; // optional — gift/manual may not have a price
   currency?: string;
   now?: Date;
+  line?: string; // the buyer's own line, for a register_buyer product's list
 };
 
 export type IssueResult =
-  | { ok: true; pair_id: string; issuer_side: '1' | '2'; envelope: string }
+  | { ok: true; pair_id: string; issuer_side: '1' | '2'; envelope: string; registered?: string }
   | { ok: false; reason: string };
 
 export async function issueGrain(input: IssueInput): Promise<IssueResult> {
@@ -96,7 +98,10 @@ export async function issueGrain(input: IssueInput): Promise<IssueResult> {
       },
       'grain issued',
     );
-    return { ok: true, pair_id: grain.pair_id, issuer_side: grain.issuer_side, envelope };
+    const registered = product.register_buyer
+      ? await registerBuyer(ctx, product, buyer_bare, input.line, now, purchase.id)
+      : undefined;
+    return { ok: true, pair_id: grain.pair_id, issuer_side: grain.issuer_side, envelope, ...(registered ? { registered } : {}) };
   } catch (err) {
     ctx.db
       .prepare("UPDATE purchases SET status = 'failed', notes = ? WHERE id = ?")
@@ -170,5 +175,38 @@ export async function issueForPayment(ctx: AppContext, p: PaymentInput): Promise
   const result = await issueGrain({ ctx, purchase: row, product, amount_cents: p.amount_cents, currency: p.currency });
   if (!result.ok) return { ok: true, error: 'grain_issuance_failed', reason: result.reason };
   return { ok: true, issued: true, purchase_id, pair_id: result.pair_id };
+}
+
+// The list a register_buyer product keeps is its sed: collective — one entry
+// per paid buyer, settled in order of arrival: the handle, the date, and their
+// line if they left one. Never the amount: the list is the tier's. The entry
+// is written under a passphrase derived from TICKET_AGENT_SECRET, as the audit
+// log's are. A list that cannot be written never undoes the ticket: the
+// failure is logged for the operator, and the payment and grain stand.
+async function registerBuyer(
+  ctx: AppContext,
+  product: Product,
+  buyer: string,
+  line: string | undefined,
+  now: Date,
+  purchase_id: string,
+): Promise<string | undefined> {
+  const collective = product.sed.replace(/^sed:/, '');
+  const date = now.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
+  const declaration = `${buyer} — ${date}` + (line ? ` — \u201c${line}\u201d` : '');
+  try {
+    const text = await ctx.mcp.callTool('pscale_settle', {
+      collective,
+      declaration,
+      passphrase: deriveCollectivePassphrase(ctx.env.TICKET_AGENT_SECRET, collective, 'entry'),
+    });
+    const m = /sed:[^:\s]+:(\d+)\b/.exec(text);
+    if (!m) throw new Error(text.slice(0, 200));
+    ctx.log.info({ purchase_id, product_id: product.id, buyer, address: m[0] }, 'buyer written onto the list');
+    return m[0];
+  } catch (err) {
+    ctx.log.error({ purchase_id, product_id: product.id, buyer, err: (err as Error).message }, 'list entry FAILED — ticket stands; write it by hand');
+    return undefined;
+  }
 }
 

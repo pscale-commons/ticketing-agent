@@ -152,7 +152,7 @@ function renderBuyForm(product: Product, beach: string): string {
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Buy — ${escapeHtml(product.id)}</title>
+  <title>${escapeHtml(product.title ?? 'Buy — ' + product.id)}</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
     body { font-family: system-ui, sans-serif; max-width: 36rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
@@ -171,13 +171,13 @@ function renderBuyForm(product: Product, beach: string): string {
 </head>
 <body>
   <p><a href="/">&larr; back to catalogue</a></p>
-  <h1>${escapeHtml(product.id)}</h1>
+  <h1>${escapeHtml(product.title ?? product.id)}</h1>
   <p>${escapeHtml(product.description)}</p>
   <div class="meta">
     <dl>
       <dt>face</dt><dd>${escapeHtml(product.face)}</dd>
       <dt>scope</dt><dd>${escapeHtml(product.scope)}</dd>
-      <dt>duration</dt><dd>${product.duration_days} days</dd>
+      <dt>duration</dt><dd>${product.duration_days >= 36500 ? 'for good' : product.duration_days + ' days'}</dd>
       ${product.tier ? `<dt>tier</dt><dd>${escapeHtml(product.tier)}</dd>` : ''}
       <dt>collective</dt><dd><code>${escapeHtml(product.sed)}</code></dd>
       <dt>payment</dt><dd>${escapeHtml(product.price.driver)}</dd>
@@ -231,6 +231,7 @@ export function purchaseRoutes(ctx: AppContext): Hono {
         duration_days: product.duration_days,
         ...(product.tier ? { tier: product.tier } : {}),
         description: product.description,
+        ...(product.title ? { title: product.title } : {}),
         driver: product.price.driver,
       });
     }
