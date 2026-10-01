@@ -17,6 +17,7 @@ import type {
   WebhookEvent,
   CreateInvoiceInput,
   CreateInvoiceResult,
+  PaidLookup,
 } from '../src/drivers/types.js';
 import { WebhookSignatureError } from '../src/drivers/types.js';
 import type { McpClient } from '../src/lib/pscale.js';
@@ -93,7 +94,7 @@ export function fakeCtx(overrides: FakeCtxOverrides = {}): AppContext {
 // ── fake MCP client ────────────────────────────────────────────────────
 //
 // Models a tiny subset of bsp-mcp's behaviour: per-block JSON storage,
-// pscale_register that allocates positions and auto-creates the sed: block.
+// pscale_settle that allocates positions and auto-creates the sed: block.
 // Enough to exercise grain.ts, audit.ts, and verifier.ts without a real MCP.
 
 export type FakeMcpCall = { name: string; args: Record<string, unknown> };
@@ -189,10 +190,10 @@ export function fakeMcpClient(): FakeMcpClient {
     return '';
   });
 
-  // Default pscale_register — auto-creates the collective on first call (the
+  // Default pscale_settle — auto-creates the collective on first call (the
   // old pscale_create_collective tool is gone), allocates the next position,
   // stores the declaration. Mirrors the live ack "Registered at sed:<coll>:<pos> on <beach>".
-  responses.set('pscale_register', (args) => {
+  responses.set('pscale_settle', (args) => {
     const collective = args['collective'] as string;
     const declaration = args['declaration'] as string;
     const key = blockKey(`sed:${collective}`, collective);
@@ -200,7 +201,7 @@ export function fakeMcpClient(): FakeMcpClient {
     const pos = nextPosition(cur);
     cur[pos] = { _: declaration };
     blocks.set(key, cur);
-    return `Registered at sed:${collective}:${pos} on https://beach.test.`;
+    return `Settled at sed:${collective}:${pos} on https://beach.test.`;
   });
 
   return {
@@ -233,6 +234,7 @@ export type FakeStripeDriver = PaymentDriver & {
   createdSessions: CreateCheckoutInput[];
   refunds: CreateRefundInput[];
   invoices: CreateInvoiceInput[];
+  lookups: Map<string, PaidLookup>;
   failNextCheckout?: Error;
   failNextRefund?: Error;
 };
@@ -242,13 +244,18 @@ export function fakeStripeDriver(): FakeStripeDriver {
   const createdSessions: CreateCheckoutInput[] = [];
   const refunds: CreateRefundInput[] = [];
   const invoices: CreateInvoiceInput[] = [];
+  const lookups = new Map<string, PaidLookup>();
 
   const driver: FakeStripeDriver = {
     webhookEvents,
     createdSessions,
     refunds,
     invoices,
+    lookups,
     name: 'stripe',
+    async lookupPaid(driver_ref: string): Promise<PaidLookup | null> {
+      return lookups.get(driver_ref) ?? null;
+    },
     async createInvoice(input: CreateInvoiceInput): Promise<CreateInvoiceResult> {
       invoices.push(input);
       const driver_ref = `in_${input.purchase_id}`;
