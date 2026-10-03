@@ -30,6 +30,8 @@ const productSchema = z.object({
   duration_days: z.number().int().positive(),
   title: z.string().min(1).optional(),
   register_buyer: z.boolean().optional(),
+  list_block: z.string().regex(/^[a-z0-9][a-z0-9:\-]{1,127}$/, 'list_block is a block name').optional(),
+  buyer: z.enum(['handle', 'character']).optional(),
   tier: z.enum(['soft', 'medium', 'hard']).optional(),
   rate_limit: rateLimitSchema.optional(),
   price: priceSchema,

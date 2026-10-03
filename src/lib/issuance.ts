@@ -194,6 +194,7 @@ async function registerBuyer(
   const collective = product.sed.replace(/^sed:/, '');
   const date = now.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
   const declaration = `${buyer} — ${date}` + (line ? ` — \u201c${line}\u201d` : '');
+  if (product.list_block) return appendToList(ctx, product, product.list_block, declaration, purchase_id, buyer);
   try {
     const text = await ctx.mcp.callTool('pscale_settle', {
       collective,
@@ -204,6 +205,38 @@ async function registerBuyer(
     if (!m) throw new Error(text.slice(0, 200));
     ctx.log.info({ purchase_id, product_id: product.id, buyer, address: m[0] }, 'buyer written onto the list');
     return m[0];
+  } catch (err) {
+    ctx.log.error({ purchase_id, product_id: product.id, buyer, err: (err as Error).message }, 'list entry FAILED — ticket stands; write it by hand');
+    return undefined;
+  }
+}
+
+// A LIST ONLY THIS MACHINE WRITES: an ordinary block at the beach, founded
+// latched to a key derived from TICKET_AGENT_SECRET the first time it is
+// needed, and appended to under that key ever after — so no one else can add a
+// line that a keeper would count as a seat. The founding write carries no
+// secret: over a list already latched it is refused and changes nothing, and
+// only where nothing stands does it create the block.
+async function appendToList(
+  ctx: AppContext,
+  product: Product,
+  block: string,
+  declaration: string,
+  purchase_id: string,
+  buyer: string,
+): Promise<string | undefined> {
+  const beach = ctx.config.agent.beach ?? 'https://beach.happyseaurchin.com';
+  const key = deriveCollectivePassphrase(ctx.env.TICKET_AGENT_SECRET, block, 'entry');
+  try {
+    await ctx.mcp.callTool('bsp', {
+      agent_id: beach, block, new_lock: key,
+      content: { _: `${product.title ?? product.id} — each entry below is one, in the order they arrived: the name it was bought for, the date, and a line of the buyer's own if they left one; never the amount. Written by the ticket machine alone, under its own key.` },
+    }).catch(() => '');
+    const text = await ctx.mcp.callTool('bsp', { agent_id: beach, block, append: true, content: { _: declaration }, secret: key });
+    const m = /→\s*([0-9.]+)/.exec(text);
+    if (!m) throw new Error(text.slice(0, 200));
+    ctx.log.info({ purchase_id, product_id: product.id, buyer, address: `${block}:${m[1]}` }, 'buyer written onto the list');
+    return `${block}:${m[1]}`;
   } catch (err) {
     ctx.log.error({ purchase_id, product_id: product.id, buyer, err: (err as Error).message }, 'list entry FAILED — ticket stands; write it by hand');
     return undefined;

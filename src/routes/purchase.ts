@@ -42,13 +42,21 @@ function escapeHtml(s: string): string {
   });
 }
 
+// A CHARACTER'S PRODUCT — a seat at a world's tables — is bought for a
+// character, who stands at a table rather than at the beach itself: the box
+// asks for the character, the hint looks for it at the tables, and the
+// machinery (face, scope, collective) stays out of the player's way.
+const forCharacter = (product: Product): boolean => product.buyer === 'character';
+
 function buyFormCopy(product: Product): { intro: string; submit: string; help: string } {
   switch (product.price.driver) {
     case 'stripe':
       return {
         intro: '',
         submit: 'Continue to payment',
-        help: 'You will be redirected to Stripe to complete payment. The grain arrives on the substrate after Stripe confirms the charge.',
+        help: forCharacter(product)
+          ? 'You pay on Stripe. A moment later the seat is on the list under your character\'s name, and it shows beside your character at happyseaurchin.com/models.'
+          : 'You will be redirected to Stripe to complete payment. The grain arrives on the substrate after Stripe confirms the charge.',
       };
     case 'gift':
       return {
@@ -81,6 +89,56 @@ function buyFormCopy(product: Product): { intro: string; submit: string; help: s
 // own pages take (happyseaurchin-home theme.js, xstream-bsp
 // src/kernel/name-standing.ts): the last segment of every block name, so a
 // person with a shell and a pool but no passport still stands.
+// FOR A CHARACTER, THE HINT LOOKS AT THE TABLES: a character stands at a table
+// (<beach>/w/<table>), never at the beach itself, so the box says where the
+// name typed stands — or offers the spelling that does — reading each listed
+// table's own index once. Never a gate; the button works as before.
+function characterCheckScript(beach: string): string {
+  return `<script>
+(function(){
+  var BEACH = ${JSON.stringify(beach.replace(/\/+$/, ''))};
+  var box = document.getElementById('buyer_agent_id'), line = document.getElementById('near');
+  var seen = null, asked = false;
+  function ask(){
+    if (asked) return; asked = true;
+    fetch(BEACH + '/.well-known/pscale-beach?tables', { cache: 'no-store' }).then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(t){
+        var tables = ((t && t.tables) || []).slice(0, 24);
+        return Promise.all(tables.map(function(x){
+          var name = typeof x === 'string' ? x : x.name;
+          return fetch(BEACH + '/w/' + encodeURIComponent(name) + '/.well-known/pscale-beach', { cache: 'no-store' })
+            .then(function(r){ return r.ok ? r.json() : null; })
+            .then(function(ix){ return ((ix && ix.blocks) || []).filter(function(n){ return typeof n === 'string' && n.indexOf('passport:') === 0; })
+              .map(function(n){ return { who: n.slice(9), table: name }; }); })
+            .catch(function(){ return []; });
+        }));
+      })
+      .then(function(lists){ seen = [].concat.apply([], lists || []); say(); })
+      .catch(function(){ /* the form stands without it */ });
+  }
+  function say(){
+    var name = box.value.trim();
+    if (!seen || name.length < 2){ line.hidden = true; return; }
+    line.textContent = '';
+    var at = seen.filter(function(c){ return c.who === name; }).map(function(c){ return c.table; });
+    if (at.length){ line.textContent = name + ' stands at ' + at.join(', ') + ' — the seat goes to them.'; line.hidden = false; return; }
+    var near = seen.filter(function(c){ return c.who.toLowerCase() === name.toLowerCase(); })[0];
+    if (near){
+      line.appendChild(document.createTextNode('No character is called exactly ' + name + '. Did you mean '));
+      var a = document.createElement('a'); a.href = '#'; a.textContent = near.who;
+      a.addEventListener('click', function(e){ e.preventDefault(); box.value = near.who; say(); box.focus(); });
+      line.appendChild(a); line.appendChild(document.createTextNode(' (at ' + near.table + ')?'));
+    } else {
+      line.textContent = 'No character called ' + name + ' stands at a table yet — check the spelling, or carry on if your character is new.';
+    }
+    line.hidden = false;
+  }
+  box.addEventListener('focus', ask);
+  box.addEventListener('input', function(){ ask(); say(); });
+})();
+</script>`;
+}
+
 function nameCheckScript(beach: string): string {
   return `<script>
 (function(){
@@ -173,7 +231,7 @@ function renderBuyForm(product: Product, beach: string): string {
   <p><a href="/">&larr; back to catalogue</a></p>
   <h1>${escapeHtml(product.title ?? product.id)}</h1>
   <p>${escapeHtml(product.description)}</p>
-  <div class="meta">
+  ${forCharacter(product) ? '' : `<div class="meta">
     <dl>
       <dt>face</dt><dd>${escapeHtml(product.face)}</dd>
       <dt>scope</dt><dd>${escapeHtml(product.scope)}</dd>
@@ -182,16 +240,18 @@ function renderBuyForm(product: Product, beach: string): string {
       <dt>collective</dt><dd><code>${escapeHtml(product.sed)}</code></dd>
       <dt>payment</dt><dd>${escapeHtml(product.price.driver)}</dd>
     </dl>
-  </div>
+  </div>`}
   ${copy.intro ? `<div class="intro">${escapeHtml(copy.intro)}</div>` : ''}
   ${product.price.driver === 'invoice' ? '' : `<form method="post" action="/buy/${encodeURIComponent(product.id)}">
-    <label for="buyer_agent_id">Your handle on the beach — exactly as it stands, capitals and all. The ticket goes to that name.</label>
+    <label for="buyer_agent_id">${forCharacter(product)
+      ? "Your character's name — exactly as it stands at the table, capitals and all. The seat goes to that character."
+      : 'Your handle on the beach — exactly as it stands, capitals and all. The ticket goes to that name.'}</label>
     <input id="buyer_agent_id" name="buyer_agent_id" type="text" required pattern="[a-zA-Z0-9_:.\\-]{2,128}" placeholder="e.g. brisa" autocapitalize="none" autocorrect="off" spellcheck="false" />
     <p id="near" class="near" hidden></p>
     <button type="submit">${escapeHtml(copy.submit)}</button>
     <p class="help">${copy.help}</p>
   </form>
-  ${nameCheckScript(beach)}`}
+  ${forCharacter(product) ? characterCheckScript(beach) : nameCheckScript(beach)}`}
 </body>
 </html>`;
 }
@@ -282,7 +342,9 @@ export function purchaseRoutes(ctx: AppContext): Hono {
     return c.html(
       renderStatus(
         'Payment received',
-        'Thanks. Your ticket grain will arrive on the substrate shortly. You can close this tab.',
+        forCharacter(product)
+          ? 'Thanks — your seat is on its way. In a minute it shows beside your character at happyseaurchin.com/models, and the world keeps moving for the beats it covers. You can close this tab.'
+          : 'Thanks. Your ticket grain will arrive on the substrate shortly. You can close this tab.',
         product.id,
       ),
     );
