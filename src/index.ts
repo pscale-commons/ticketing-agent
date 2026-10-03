@@ -64,6 +64,11 @@ async function main() {
     log.info({ port: info.port, public_url: env.PUBLIC_URL }, 'ticketing-agent listening');
   });
 
+  // A REDEPLOY IS NOT A CRASH (David, 2026-10-03): the platform stops the
+  // outgoing deployment with SIGTERM. `npm start` execs node, so the signal
+  // reaches this process rather than a shell that would die of it; and a
+  // connection held open must not keep it waiting until it is killed — that
+  // reads as a crash too — so it leaves with 0 within three seconds either way.
   const shutdown = (signal: string) => {
     log.info({ signal }, 'shutting down');
     verifierHandle.stop();
@@ -71,6 +76,7 @@ async function main() {
       db.close();
       process.exit(0);
     });
+    setTimeout(() => process.exit(0), 3000).unref();
   };
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
