@@ -32,6 +32,16 @@ export interface Product {
   // product's public list (founding supporters) — with the date and an
   // optional line of their own, asked for at checkout.
   register_buyer?: boolean;
+  // The list kept as an ORDINARY block only this machine can write — latched to
+  // a key derived from TICKET_AGENT_SECRET — instead of the product's sed:
+  // collective, which anyone may register into. Where an entry is worth
+  // something (a seat that keeps beats at a world, counted by its keeper), the
+  // list must not take an entry the machine did not write.
+  list_block?: string;
+  // Who the product is bought FOR: a handle on the beach (the default), or a
+  // character at a world's tables — a seat — whose form asks for the
+  // character, looks for it at the tables, and keeps the machinery out of sight.
+  buyer?: 'handle' | 'character';
 }
 
 export type PriceConfig =
