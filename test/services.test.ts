@@ -162,3 +162,22 @@ test('buy page: asks for the handle exactly and checks it against the beach it n
   assert.match(html, /"https:\/\/beach\.example\.test\/\.well-known\/pscale-beach"/);
   assert.match(html, /Did you mean /);
 });
+
+test('share: every product answers at /share/<id>, writes /share links, and /buy/<id> still answers', async () => {
+  const driver = fakeStripeDriver();
+  const ctx = fakeCtx({ stripeDriver: driver, products: [...TEST_PRODUCTS, SERVICE] });
+  const app = createApp(ctx);
+  const page = await (await app.request('/share/beach-service')).text();
+  assert.match(page, /action="\/share\/beach-service"/);
+  const old = await app.request('/buy/beach-service');
+  assert.equal(old.status, 200);
+  const res = await app.request('/share/beach-service', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ buyer_agent_id: 'brisa' }),
+  });
+  assert.equal(res.status, 200);
+  assert.match(driver.createdSessions.at(-1)!.success_url, /\/share\/beach-service\/success\?purchase=/);
+  assert.match(driver.createdSessions.at(-1)!.cancel_url, /\/share\/beach-service\/cancel\?purchase=/);
+  assert.equal((await app.request('/share/beach-service/success')).status, 200);
+  assert.equal((await app.request('/buy/beach-service/cancel')).status, 200);
+  assert.equal((await app.request('/sell/beach-service')).status, 404);
+});

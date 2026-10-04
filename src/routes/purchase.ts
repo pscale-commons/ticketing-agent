@@ -1,12 +1,13 @@
 // Purchase flow.
 //
-//   GET  /buy/:id           → minimal HTML form to enter buyer_agent_id
+//   (every route answers at /share/:id and, as an alias, /buy/:id)
+//   GET  /share/:id         → minimal HTML form to enter buyer_agent_id
 //                              (Accept: application/json returns product info)
-//   POST /buy/:id           → creates a pending purchase + driver checkout;
+//   POST /share/:id         → creates a pending purchase + driver checkout;
 //                              form-encoded → 303 redirect to checkout_url;
 //                              JSON          → returns { checkout_url, purchase_id }
-//   GET  /buy/:id/success   → static success page (grain arrives async)
-//   GET  /buy/:id/cancel    → static cancel page
+//   GET  /share/:id/success → static success page (grain arrives async)
+//   GET  /share/:id/cancel  → static cancel page
 //
 // Per protocol §4 the *client* (xstream-play) handles the buy affordance
 // and redirect; this route is the issuer-side endpoint that affordance
@@ -23,6 +24,12 @@ import { verifyGift } from '../drivers/gift.js';
 import { issueGrain } from '../lib/issuance.js';
 
 const AGENT_ID_RE = /^[a-zA-Z0-9_:.\-]{2,128}$/;
+
+// A product's address is /share/<id>: the beach shares, it does not sell (David,
+// 2026-10-04: "the language throughout is not buy and sell, but sharing"). Every
+// link this machine writes uses it; /buy/<id> answers the same, so the links
+// already out in the world (a collective's purchase_url, a page) keep working.
+export const SHARE = '/share';
 const DEFAULT_BEACH = 'https://beach.happyseaurchin.com';
 
 function findProduct(ctx: AppContext, id: string): Product | undefined {
@@ -242,7 +249,7 @@ function renderBuyForm(product: Product, beach: string): string {
     </dl>
   </div>`}
   ${copy.intro ? `<div class="intro">${escapeHtml(copy.intro)}</div>` : ''}
-  ${product.price.driver === 'invoice' ? '' : `<form method="post" action="/buy/${encodeURIComponent(product.id)}">
+  ${product.price.driver === 'invoice' ? '' : `<form method="post" action="${SHARE}/${encodeURIComponent(product.id)}">
     <label for="buyer_agent_id">${forCharacter(product)
       ? "Your character's name — exactly as it stands at the table, capitals and all. The seat goes to that character."
       : 'Your handle on the beach — exactly as it stands, capitals and all. The ticket goes to that name.'}</label>
@@ -285,7 +292,7 @@ function renderEmailStep(product: Product, buyer_agent_id: string): string {
 <body>
   <h1>${escapeHtml(product.title ?? product.id)}</h1>
   <p class="who">For <strong>${escapeHtml(buyer_agent_id)}</strong>.</p>
-  <form method="post" action="/buy/${encodeURIComponent(product.id)}">
+  <form method="post" action="${SHARE}/${encodeURIComponent(product.id)}">
     <input type="hidden" name="buyer_agent_id" value="${escapeHtml(buyer_agent_id)}" />
     ${emailField()}
     <button type="submit">Continue to payment</button>
@@ -309,7 +316,7 @@ function renderStatus(title: string, message: string, productId: string): string
 <body>
   <h1>${escapeHtml(title)}</h1>
   <p>${escapeHtml(message)}</p>
-  <p><a href="/buy/${encodeURIComponent(productId)}">&larr; back to product</a> · <a href="/">catalogue</a></p>
+  <p><a href="${SHARE}/${encodeURIComponent(productId)}">&larr; back</a> · <a href="/">catalogue</a></p>
 </body>
 </html>`;
 }
@@ -317,7 +324,7 @@ function renderStatus(title: string, message: string, productId: string): string
 export function purchaseRoutes(ctx: AppContext): Hono {
   const app = new Hono();
 
-  app.get('/buy/:id', (c) => {
+  app.get('/:door{share|buy}/:id', (c) => {
     const product = findProduct(ctx, c.req.param('id'));
     if (!product) return c.json({ error: 'unknown_product' }, 404);
     if (c.req.header('accept')?.includes('application/json')) {
@@ -336,7 +343,7 @@ export function purchaseRoutes(ctx: AppContext): Hono {
     return c.html(renderBuyForm(product, ctx.config.agent.beach ?? DEFAULT_BEACH));
   });
 
-  app.post('/buy/:id', async (c) => {
+  app.post('/:door{share|buy}/:id', async (c) => {
     const product = findProduct(ctx, c.req.param('id'));
     if (!product) return c.json({ error: 'unknown_product' }, 404);
 
@@ -375,11 +382,11 @@ export function purchaseRoutes(ctx: AppContext): Hono {
       }
       case 'gift':   return handleGift(ctx, c, product, buyer_agent_id, body);
       case 'manual': return handleManual(ctx, c, product, buyer_agent_id);
-      case 'invoice': return c.json({ error: 'invoice_only', note: 'priced per job — the operator raises an invoice' }, 400);
+      case 'invoice': return c.json({ error: 'invoice_only', note: 'a contribution for each piece of work — the operator raises an invoice' }, 400);
     }
   });
 
-  app.get('/buy/:id/success', (c) => {
+  app.get('/:door{share|buy}/:id/success', (c) => {
     const product = findProduct(ctx, c.req.param('id'));
     if (!product) return c.json({ error: 'unknown_product' }, 404);
     return c.html(
@@ -395,7 +402,7 @@ export function purchaseRoutes(ctx: AppContext): Hono {
     );
   });
 
-  app.get('/buy/:id/cancel', (c) => {
+  app.get('/:door{share|buy}/:id/cancel', (c) => {
     const product = findProduct(ctx, c.req.param('id'));
     if (!product) return c.json({ error: 'unknown_product' }, 404);
     return c.html(renderStatus('Payment cancelled', 'No charge was made.', product.id));
@@ -435,8 +442,8 @@ async function handleStripe(
       product,
       buyer_agent_id,
       ...(email ? { email } : {}),
-      success_url: `${ctx.env.PUBLIC_URL}/buy/${encodeURIComponent(product.id)}/success?purchase=${purchase_id}`,
-      cancel_url: `${ctx.env.PUBLIC_URL}/buy/${encodeURIComponent(product.id)}/cancel?purchase=${purchase_id}`,
+      success_url: `${ctx.env.PUBLIC_URL}${SHARE}/${encodeURIComponent(product.id)}/success?purchase=${purchase_id}`,
+      cancel_url: `${ctx.env.PUBLIC_URL}${SHARE}/${encodeURIComponent(product.id)}/cancel?purchase=${purchase_id}`,
     });
     driver_ref = result.driver_ref;
     checkout_url = result.checkout_url;

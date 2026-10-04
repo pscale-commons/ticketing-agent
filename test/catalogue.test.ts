@@ -12,7 +12,7 @@ test('catalogue: GET / with Accept: application/json returns view', async () => 
   assert.equal(body.agent_id, 'agent:tickets-test');
   assert.equal(body.products.length, 2);
   assert.equal(body.products[0]!.id, 'character-30d');
-  assert.equal(body.products[0]!.buy_url, 'https://tickets.test/buy/character-30d');
+  assert.equal(body.products[0]!.buy_url, 'https://tickets.test/share/character-30d');
   assert.equal(body.products[0]!.driver, 'stripe');
   assert.equal(body.products[1]!.driver, 'gift');
   assert.equal(body.products[1]!.tier, 'hard');
@@ -27,7 +27,7 @@ test('catalogue: GET / default returns HTML page', async () => {
   assert.match(html, /<title>Tickets — agent:tickets-test<\/title>/);
   assert.match(html, /character-30d/);
   assert.match(html, /designer-90d/);
-  assert.match(html, /href="https:\/\/tickets\.test\/buy\/character-30d"/);
+  assert.match(html, /href="https:\/\/tickets\.test\/share\/character-30d"/);
 });
 
 test('catalogue: HTML escapes hostile config strings', async () => {

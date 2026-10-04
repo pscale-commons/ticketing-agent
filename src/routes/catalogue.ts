@@ -5,8 +5,9 @@
 //   GET / Accept: text/html (default) → minimal HTML page
 //
 // No write paths here. The buy affordance per protocol §4.1 is
-// `${PUBLIC_URL}/buy/${product_id}` — wired in M3.
+// `${PUBLIC_URL}/share/${product_id}` (/buy/ answers too) — wired in M3.
 
+import { SHARE } from './purchase.js';
 import { Hono } from 'hono';
 import type { AppContext } from '../types.js';
 
@@ -32,7 +33,7 @@ function publicView(ctx: AppContext): { agent_id: string; products: PublicProduc
     ...(p.tier ? { tier: p.tier } : {}),
     description: p.description,
     driver: p.price.driver,
-    buy_url: `${ctx.env.PUBLIC_URL}/buy/${encodeURIComponent(p.id)}`,
+    buy_url: `${ctx.env.PUBLIC_URL}${SHARE}/${encodeURIComponent(p.id)}`,
   }));
   return { agent_id: ctx.config.agent.id, products };
 }
