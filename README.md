@@ -143,12 +143,12 @@ verifier:
 ### Public
 
 - `GET /` — product catalogue (HTML; `Accept: application/json` for the JSON form).
-- `GET /buy/:product_id` — per-driver buy form.
-- `POST /buy/:product_id` — start a purchase.
+- `GET /share/:product_id` — per-driver form. (Every product route answers at `/share/…` and, as an alias for links already out, `/buy/…`; the machine writes `/share/`.)
+- `POST /share/:product_id` — start a purchase.
   - **Stripe**: `{ buyer_agent_id }` → returns `{ checkout_url, purchase_id }` (or 303 redirect for form posts).
   - **Gift**: `{ buyer_agent_id, gifter_agent_id, issued_at, nonce, signature }`. Signature is base64 Ed25519 over `ticket-gift:<product_id>:<buyer_agent_id>:<issued_at>:<nonce>`. Returns `{ ok, purchase_id, pair_id }` on success.
   - **Manual**: `{ buyer_agent_id }` → returns `{ purchase_id, status: "pending", instructions, reference }`.
-- `GET /buy/:product_id/{success,cancel}` — minimal landing pages.
+- `GET /share/:product_id/{success,cancel}` — minimal landing pages.
 - `POST /webhook/stripe` — Stripe Checkout Session webhook. Signature-verified, idempotent, rate-limited at issuance time.
 - `GET /health` — agent identity + product count.
 
