@@ -60,7 +60,7 @@ export class StripeDriver implements PaymentDriver {
     // period arrives as invoice.paid carrying the subscription's metadata.
     const price = await this.stripe.prices.retrieve(input.product.price.stripe_price_id);
     const recurring = price.type === 'recurring';
-    const session = await this.stripe.checkout.sessions.create({
+    const base: Stripe.Checkout.SessionCreateParams = {
       mode: recurring ? 'subscription' : 'payment',
       line_items: [{ price: input.product.price.stripe_price_id, quantity: 1 }],
       success_url: input.success_url,
@@ -78,8 +78,29 @@ export class StripeDriver implements PaymentDriver {
             }],
           }
         : {}),
-      // Stripe ties the payment to a customer email if supplied; for M3 we omit it.
-    });
+    };
+    // A bank transfer beside the card: it needs the payer as a customer before
+    // checkout, and Stripe offers it only once switched on for the account —
+    // until then (or for a subscription) the same checkout runs on its own.
+    let session: Stripe.Checkout.Session;
+    if (input.product.bank_transfer && input.email && !recurring) {
+      const customer = await this.customerFor(input.email, input.buyer_agent_id);
+      try {
+        session = await this.stripe.checkout.sessions.create({
+          ...base,
+          customer: customer.id,
+          payment_method_types: ['card', 'customer_balance'],
+          payment_method_options: {
+            customer_balance: { funding_type: 'bank_transfer', bank_transfer: { type: 'gb_bank_transfer' } },
+          },
+        });
+      } catch (err) {
+        if (!/customer_balance/i.test((err as Error).message)) throw err;
+        session = await this.stripe.checkout.sessions.create({ ...base, customer: customer.id });
+      }
+    } else {
+      session = await this.stripe.checkout.sessions.create(base);
+    }
     if (!session.url) {
       throw new Error('Stripe Checkout Session created but had no url');
     }
@@ -118,20 +139,25 @@ export class StripeDriver implements PaymentDriver {
     return { refund_id: refund.id };
   }
 
+  // The payer as a Stripe customer, found by email or made — a new one holds
+  // its Beach handle as an invoice default, so later invoices carry it too.
+  private async customerFor(email: string, handle: string, name?: string): Promise<{ id: string }> {
+    const found = await this.stripe.customers.list({ email, limit: 1 });
+    if (found.data[0]) return found.data[0];
+    return this.stripe.customers.create({
+      email,
+      ...(name ? { name } : {}),
+      metadata: { handle },
+      invoice_settings: { custom_fields: [{ name: BEACH_HANDLE_FIELD, value: handle }] },
+    });
+  }
+
   async createInvoice(input: CreateInvoiceInput): Promise<CreateInvoiceResult> {
     if (input.product.price.driver !== 'invoice') {
       throw new Error(`product ${input.product.id} is not an invoice product`);
     }
     const { currency, days_until_due } = input.product.price;
-    const found = await this.stripe.customers.list({ email: input.email, limit: 1 });
-    const customer =
-      found.data[0] ??
-      (await this.stripe.customers.create({
-        email: input.email,
-        ...(input.name ? { name: input.name } : {}),
-        metadata: { handle: input.buyer_agent_id },
-        invoice_settings: { custom_fields: [{ name: BEACH_HANDLE_FIELD, value: input.buyer_agent_id }] },
-      }));
+    const customer = await this.customerFor(input.email, input.buyer_agent_id, input.name);
     const invoice = await this.stripe.invoices.create({
       customer: customer.id,
       collection_method: 'send_invoice',
@@ -207,7 +233,13 @@ export class StripeDriver implements PaymentDriver {
     if (event.type === 'invoice.paid') {
       return parseInvoicePaid(event.data.object as Stripe.Invoice);
     }
-    if (event.type !== 'checkout.session.completed') {
+    // A card pays at once (checkout.session.completed, paid). A bank transfer
+    // completes the checkout unpaid and pays when the money lands:
+    // checkout.session.async_payment_succeeded, the same session, now paid.
+    if (event.type === 'checkout.session.async_payment_failed') {
+      return { kind: 'ignored', reason: 'async-payment-failed' };
+    }
+    if (event.type !== 'checkout.session.completed' && event.type !== 'checkout.session.async_payment_succeeded') {
       return { kind: 'ignored', reason: `event-type:${event.type}` };
     }
     const session = event.data.object as Stripe.Checkout.Session;
