@@ -106,8 +106,9 @@ export async function issueGrain(input: IssueInput): Promise<IssueResult> {
       : undefined;
     // A TICKET'S CREDITS, THE MOMENT IT IS PAID (David, 25 Nov 2026: not
     // monthly), written into the issuer's book now. A book that cannot be
-    // written never undoes the ticket: the failure is logged, and a reissue
-    // writes what is missing, since each line carries the purchase it came from.
+    // written never undoes the ticket: the failure is logged, and
+    // POST /admin/reissue/<id> writes what is missing (writeMissingCredits),
+    // since each line carries the purchase it came from.
     let minted: number | undefined;
     if (product.credits) {
       const m = await mintAtPayment(ctx, product, purchase.id, buyer_bare, grain.pair_id, now, input.amount_cents ?? purchase.amount_cents ?? undefined);
@@ -115,7 +116,7 @@ export async function issueGrain(input: IssueInput): Promise<IssueResult> {
         minted = m.lines;
         ctx.log.info({ purchase_id: purchase.id, product_id: product.id, lines: m.lines }, 'credits written into the book');
       } else {
-        ctx.log.error({ purchase_id: purchase.id, product_id: product.id, reason: m.reason }, 'credits NOT written — ticket stands; reissue to write them');
+        ctx.log.error({ purchase_id: purchase.id, product_id: product.id, reason: m.reason }, 'credits NOT written — ticket stands; POST /admin/reissue/<purchase_id> writes them');
       }
     }
     return {
@@ -132,6 +133,18 @@ export async function issueGrain(input: IssueInput): Promise<IssueResult> {
     );
     return { ok: false, reason: (err as Error).message };
   }
+}
+
+// A PAID TICKET WHOSE CREDITS DID NOT ALL LAND (a split that could not be read
+// at payment, a book that refused a line): its credits written now, split as of
+// the moment it was paid, never past what the ticket carries. Nothing to do for
+// a product without credits, and nothing written twice.
+export async function writeMissingCredits(ctx: AppContext, row: PurchaseRow, product: Product): Promise<{ ok: true; minted: number } | { ok: false; reason: string }> {
+  if (!product.credits) return { ok: true, minted: 0 };
+  if (!row.grain_pair_id) return { ok: false, reason: 'the purchase names no grain to back its credits' };
+  const paid = row.paid_at && !Number.isNaN(Date.parse(row.paid_at)) ? new Date(row.paid_at) : new Date();
+  const m = await mintAtPayment(ctx, product, row.id, bareAgent(row.buyer_agent_id), row.grain_pair_id, paid, row.amount_cents ?? undefined);
+  return m.ok ? { ok: true, minted: m.lines } : { ok: false, reason: m.reason };
 }
 
 // A payment the machine holds no pending row for: a subscription's later

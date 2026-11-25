@@ -323,3 +323,62 @@ test('credits: a test run reads its split from this computer, and nowhere else o
   assert.equal(asked[0], `http://localhost:3044/api/xp?family=o&n=10&id=${id}`);
   assert.deepEqual([...balances(linesOf(await s.read('credits:arcade-credits')))].filter(([h]) => !h.startsWith('grain')), [['ana', 7], ['ben', 3]]);
 });
+
+// A SPLIT PRODUCT FOR THE RETRY: 1000 credits split as an address answers.
+const SPLIT: Product = {
+  id: 'support-split', title: 'Support a phase', issuer: 'arcade-credits', sed: 'sed:arcade-credits', face: 'character',
+  scope: 'frame:o', duration_days: 36500, description: 'Support.', price: { driver: 'stripe', stripe_price_id: 'price_s' },
+  credits: { n: 1000, to: 'https://x.test/api/xp?family=o&n={n}&at={at}' },
+};
+const reissue = (s: ReturnType<typeof setup>, id: string) =>
+  s.app.request(`/admin/reissue/${id}`, { method: 'POST', headers: { authorization: 'Bearer admin-token', 'content-type': 'application/json' }, body: '{}' });
+function answering(split: Record<string, number> | null, asked: string[] = []) {
+  return (async (url: string) => {
+    asked.push(String(url));
+    return split ? new Response(JSON.stringify({ split }), { status: 200 }) : new Response('down', { status: 503 });
+  }) as typeof fetch;
+}
+
+test('credits: a paid ticket whose split could not be read at payment is written by reissue, as of the moment paid, once', async () => {
+  const s = setup([...TEST_PRODUCTS, SPLIT]);
+  const real = globalThis.fetch;
+  let id = '';
+  globalThis.fetch = answering(null);
+  try { id = await buy(s, 'support-split', 'cy'); } finally { globalThis.fetch = real; }
+  assert.equal(linesOf(await s.read('credits:arcade-credits')).length, 0, 'the split was down: no line, the ticket stands');
+  const paidAt = (s.ctx.db.prepare('SELECT paid_at FROM purchases WHERE id = ?').get(id) as { paid_at: string }).paid_at;
+  const asked: string[] = [];
+  globalThis.fetch = answering({ ana: 600, ben: 300, commons: 100 }, asked);
+  try {
+    const r = await reissue(s, id);
+    assert.equal(r.status, 200);
+    assert.deepEqual(await r.json(), { ok: true, idempotent: true, purchase_id: id, pair_id: (s.ctx.db.prepare('SELECT grain_pair_id FROM purchases WHERE id = ?').get(id) as { grain_pair_id: string }).grain_pair_id, minted: 3 });
+    assert.ok(asked[0]!.endsWith('at=' + encodeURIComponent(paidAt)), 'split as of the moment paid, not the moment of the retry');
+    const again = await reissue(s, id);
+    assert.equal(((await again.json()) as { minted: number }).minted, 0, 'nothing written twice');
+  } finally { globalThis.fetch = real; }
+  const held = balances(linesOf(await s.read('credits:arcade-credits')));
+  assert.deepEqual([held.get('ana'), held.get('ben'), held.get('commons')], [600, 300, 100]);
+});
+
+test('credits: a retry finishes a partial first attempt exactly, and refuses a split that would mint past the ticket', async () => {
+  const s = setup([...TEST_PRODUCTS, OWN, SPLIT]);
+  await buy(s, 'migration-credits', 'ana', 7);          // founds the book, latched, under its key
+  const real = globalThis.fetch;
+  let id = '';
+  globalThis.fetch = answering(null);
+  try { id = await buy(s, 'support-split', 'cy', 8); } finally { globalThis.fetch = real; }
+  const pair = (s.ctx.db.prepare('SELECT grain_pair_id FROM purchases WHERE id = ?').get(id) as { grain_pair_id: string }).grain_pair_id;
+  const book = s.blocks.get('credits:arcade-credits')! as Record<string, unknown>;
+  book['2'] = { _: 'a first attempt cut short', '1': id, '2': 600, '3': '2026-11-25T17:00:00Z', '5': 'ana', '6': `grain:${pair}`, '7': `ticket ${id}` };
+  globalThis.fetch = answering({ ana: 500, ben: 500 });
+  try {
+    const bad = await reissue(s, id);
+    assert.equal(bad.status, 502);
+    assert.match(((await bad.json()) as { reason: string }).reason, /600 of 1000 credits stand/);
+    assert.equal(linesOf(book).filter((l) => l.id === id).length, 1, 'nothing more written');
+  } finally { globalThis.fetch = real; }
+  globalThis.fetch = answering({ ana: 600, ben: 300, commons: 100 });
+  try { assert.equal(((await (await reissue(s, id)).json()) as { minted: number }).minted, 2); } finally { globalThis.fetch = real; }
+  assert.equal(linesOf(await s.read('credits:arcade-credits')).filter((l) => l.id === id).reduce((t, l) => t + l.n, 0), 1000);
+});

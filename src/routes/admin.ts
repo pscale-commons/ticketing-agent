@@ -15,7 +15,7 @@ import * as rateLimit from '../lib/rate-limit.js';
 import { buildRevoked } from '../lib/envelope.js';
 import { revoke, determineSide } from '../lib/grain.js';
 import { derivePassphrase } from '../lib/grain-passphrase.js';
-import { issueGrain, issuerOf, issueForPayment } from '../lib/issuance.js';
+import { issueGrain, issuerOf, issueForPayment, writeMissingCredits } from '../lib/issuance.js';
 
 function bareAgent(id: string): string {
   return id.startsWith('agent:') ? id.slice('agent:'.length) : id;
@@ -256,7 +256,17 @@ export function adminRoutes(ctx: AppContext): Hono {
       ctx.db.prepare("SELECT * FROM purchases WHERE driver = 'stripe' AND driver_ref = ?").get(ref)) as PurchaseRow | undefined;
     if (!row) return reissueFromStripe(c, ref);
     const purchase_id = row.id;
-    if (row.status === 'paid') return c.json({ ok: true, idempotent: true, purchase_id, pair_id: row.grain_pair_id });
+    if (row.status === 'paid') {
+      // the ticket stands; a credit product's book may still lack its lines
+      const product = ctx.config.products.find((p) => p.id === row.product_id);
+      const credits = product ? await writeMissingCredits(ctx, row, product) : { ok: true as const, minted: 0 };
+      if (!credits.ok) {
+        ctx.log.error({ purchase_id, reason: credits.reason }, 'admin/reissue: credits still NOT written');
+        return c.json({ ok: false, idempotent: true, purchase_id, pair_id: row.grain_pair_id, error: 'credits_not_written', reason: credits.reason }, 502);
+      }
+      if (credits.minted) ctx.log.info({ purchase_id, lines: credits.minted }, 'admin/reissue: missing credits written into the book');
+      return c.json({ ok: true, idempotent: true, purchase_id, pair_id: row.grain_pair_id, ...(product?.credits ? { minted: credits.minted } : {}) });
+    }
     if (row.status !== 'failed') return c.json({ error: 'not_a_failed_purchase', status: row.status }, 400);
     const product = ctx.config.products.find((p) => p.id === row.product_id);
     if (!product) return c.json({ error: 'unknown_product' }, 400);

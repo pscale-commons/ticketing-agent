@@ -281,9 +281,16 @@ export async function mintAtPayment(
         to = [{ to: c.to, n }];
         words = (r) => `${r.n} credits to ${r.to}, from a ticket '${title}' paid ${today(now)}`;
       }
+      // A RETRY NEVER MINTS PAST THE TICKET: where a first attempt left some of
+      // its lines and the split read now differs, what remains to write must
+      // finish the ticket's credits exactly, or nothing more is written.
+      const written = round(book.filter((l) => l.id === purchase_id).reduce((t, l) => t + l.n, 0));
+      const rest = to.filter((r) => !done.has(r.to));
+      if (written > 0 && rest.length && round(written + rest.reduce((t, r) => t + r.n, 0)) !== n) {
+        throw new Error(`${written} of ${n} credits stand under ${purchase_id}, and the split read now does not finish them; write the rest by hand`);
+      }
       let lines = 0;
-      for (const r of to) {
-        if (done.has(r.to)) continue;
+      for (const r of rest) {
         await write(ctx, issuer, {
           voicing: words(r), id: purchase_id, n: r.n, to: r.to, point,
           at: now.toISOString(), from: `grain:${pair_id}`, warrant: `ticket ${purchase_id}`,
