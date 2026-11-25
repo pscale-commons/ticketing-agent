@@ -68,7 +68,8 @@ export interface Product {
 //                   someone draws a go from it (POST /credits/draw)
 //   makers:<point>  straight to the makers the point's law names, split equally
 //                   (contract type one, point-creators)
-//   https://…       split as that address answers, { split: { <handle>: share } },
+//   https://…       split as that address answers, { split: { <handle>: share } }
+//                   (http://localhost:<port>/… in a test run, as back may be),
 //                   with {credits}, {buyer} and {at} in the address filled in
 //                   (contract types two and three: a family's XP, the ecosystem's)
 //   <handle>        straight to one holder named here (the commons, say)

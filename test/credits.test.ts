@@ -304,3 +304,22 @@ test('credits: the success page fills {purchase} in a product\'s back address, s
   const odd = await (await s.app.request('/share/own-back/success?purchase=<script>')).text();
   assert.match(odd, /href="https:\/\/happyseaurchin.com\/o-page-unit\?purchase="/, 'anything but a purchase id is left out');
 });
+
+test('credits: a test run reads its split from this computer, and nowhere else over plain http', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'credits-'));
+  const base = `agent: { id: 'agent:t', secret_env: S, pscale_mcp_url: 'https://x/mcp' }\nproducts:\n`;
+  const p = (to: string) => `${base}  - { id: c, sed: 'sed:c', face: character, scope: 'frame:m', duration_days: 1, description: d, price: { driver: stripe, stripe_price_id: p }, credits: { n: 10, to: '${to}' } }\n`;
+  writeFileSync(join(dir, 'local.yaml'), p('http://localhost:3044/api/xp?family=o&n={n}'));
+  assert.equal(loadConfig(join(dir, 'local.yaml')).products[0]!.credits!.to, 'http://localhost:3044/api/xp?family=o&n={n}');
+  writeFileSync(join(dir, 'plain.yaml'), p('http://example.com/api/xp'));
+  assert.throws(() => loadConfig(join(dir, 'plain.yaml')), /http:\/\/localhost in a test run/);
+  const LOCAL: Product = { ...OWN, id: 'local-split', credits: { n: 10, to: 'http://localhost:3044/api/xp?family=o&n={n}&id={id}' } };
+  const s = setup([...TEST_PRODUCTS, LOCAL]);
+  const asked: string[] = [];
+  const real = globalThis.fetch;
+  globalThis.fetch = (async (url: string) => { asked.push(String(url)); return new Response(JSON.stringify({ split: { ana: 7, ben: 3 } }), { status: 200 }); }) as typeof fetch;
+  let id = '';
+  try { id = await buy(s, 'local-split', 'cy'); } finally { globalThis.fetch = real; }
+  assert.equal(asked[0], `http://localhost:3044/api/xp?family=o&n=10&id=${id}`);
+  assert.deepEqual([...balances(linesOf(await s.read('credits:arcade-credits')))].filter(([h]) => !h.startsWith('grain')), [['ana', 7], ['ben', 3]]);
+});

@@ -23,13 +23,15 @@ const priceSchema = z.discriminatedUnion('driver', [
 
 // A credit-bearing ticket (types.ts CreditsConfig): what its credits do at payment.
 const POINT_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
+// A split is read from an https:// address, or from this computer in a test run, as back may be.
+export const SPLIT_RE = /^(https:\/\/\S+|http:\/\/(localhost|127\.0\.0\.1)(:\d+)?\/\S*)$/;
 const creditsSchema = z
   .object({
     n: z.number().int().positive().optional(),
     per_pound: z.number().positive().optional(),
     to: z.string().refine(
-      (t) => t === 'buyer' || t === 'pool' || /^makers:[a-z0-9][a-z0-9-]{0,63}$/.test(t) || /^https:\/\/\S+$/.test(t) || /^[A-Za-z0-9_-]{2,64}$/.test(t),
-      'credits.to is buyer, pool, makers:<point>, an https:// split, or a handle',
+      (t) => t === 'buyer' || t === 'pool' || /^makers:[a-z0-9][a-z0-9-]{0,63}$/.test(t) || SPLIT_RE.test(t) || /^[A-Za-z0-9_-]{2,64}$/.test(t),
+      'credits.to is buyer, pool, makers:<point>, an https:// split (http://localhost in a test run), or a handle',
     ),
     point: z.string().regex(POINT_RE, 'credits.point is a family name').optional(),
     free: z.number().int().positive().optional(),

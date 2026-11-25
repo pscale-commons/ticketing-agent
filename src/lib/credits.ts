@@ -38,6 +38,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { deriveCollectivePassphrase } from './audit.js';
+import { SPLIT_RE } from './config.js';
 import type { AppContext, Product } from '../types.js';
 
 type Block = Record<string, unknown>;
@@ -272,7 +273,7 @@ export async function mintAtPayment(
         to = equally(n, await makersOf(read, point));
         if (!to.length) throw new Error(`function:${point} names no makers`);
         words = (r) => `${r.n} of ${n} credits to ${r.to}, a maker of ${point} (split equally), from a ticket '${title}' paid ${today(now)}`;
-      } else if (c.to.startsWith('https://')) {
+      } else if (SPLIT_RE.test(c.to)) {
         const url = splitAddress(c.to, { credits: n, buyer, at: now.toISOString(), id: purchase_id });
         to = await fetchedSplit(url, n);
         words = (r) => `${r.n} of ${n} credits to ${r.to}, by the split at ${c.to.split('?')[0]} read ${now.toISOString()}, from a ticket '${title}' paid ${today(now)}`;
