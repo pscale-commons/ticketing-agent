@@ -172,8 +172,8 @@ Why the issuer keeps the order: a balance read from lines a holder writes about 
 
 ```yaml
 credits:
-  n: 10                 # credits the ticket carries
-  to: buyer             # buyer | pool | makers:<point> | https://… (a split)
+  n: 10                 # credits the ticket carries (or per_pound: 1000, times what was paid, for a ticket of any amount)
+  to: buyer             # buyer | pool | makers:<point> | https://… (a split) | a handle
   point: migration      # the family its credits are spent on: function:<point> names its makers ('makers: …')
   free: 3               # a pool only: free goes one handle may draw
   go: 1                 # a pool only: what one go moves
@@ -182,7 +182,8 @@ credits:
 - `to: buyer` — the buyer's own credits.
 - `to: pool` — a fund for others' goes: nothing reaches a person until someone draws a free go (`POST /credits/draw`), which moves `go` credits to the point's makers, split equally, at most `free` a handle.
 - `to: makers:<point>` — straight to the makers the point's law names, split equally (contract type one, point-creators).
-- `to: https://…` — split as that address answers, `{ "split": { "<handle>": share, … } }` (contract types two and three: a family's XP, the ecosystem's).
+- `to: https://…` — split as that address answers, `{ "split": { "<handle>": share, … } }` (contract types two and three: a family's XP, the ecosystem's). `{credits}`, `{buyer}` and `{at}` in the address are filled in with the credits, the buyer and the moment paid; a quiet buyer's product leaves `{buyer}` out.
+- `to: <handle>` — straight to one holder named here (the commons, say).
 
 A holder moves their own credits by writing a gift at their passport's 6.3 (sand-v2 3.1: `{_, 1: probe id, 2: n, 3: to, 5: when}`, `to` a handle or `function:<point>` for a go of that point) and asking `POST /credits/spend`; the machine moves it only as far as the book says they hold, once, and in order with every other move. Each line of the book is a gift in sand-v2's shape with its time and recipient swapped, since the book is an accumulator and the beach's accumulator law makes an appended entry's `3` its time: `1` the move's id, `2` n, `3` when, `4` the point, `5` to, `6` from (`grain:<pair_id>`, `fund:<product>` or a handle), `7` its warrant (`ticket <purchase id>`, the handle a free go was for, or `passport:<holder> 6.3<slot>`).
 

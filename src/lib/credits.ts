@@ -145,6 +145,13 @@ export function equally(n: number, handles: string[]): Array<{ to: string; n: nu
 
 // A split as an address answers it, { split: { <handle>: share } }, shares
 // summing to anything: contract types two and three read a family's XP there.
+// The address may ask for what it needs to split by: {credits}, {buyer} and
+// {at} (the moment paid) are filled in, each encoded; a quiet buyer's product
+// leaves {buyer} out of its address.
+export function splitAddress(url: string, fill: { credits: number; buyer: string; at: string }): string {
+  return url.replace(/\{(credits|buyer|at)\}/g, (_, k: 'credits' | 'buyer' | 'at') => encodeURIComponent(String(fill[k])));
+}
+
 async function fetchedSplit(url: string, n: number): Promise<Array<{ to: string; n: number }>> {
   const r = await fetch(url, { headers: { Accept: 'application/json' } });
   if (!r.ok) throw new Error(`the split at ${url} answered ${r.status}`);
@@ -220,6 +227,16 @@ const today = (d: Date): string => d.toLocaleDateString('en-GB', { day: 'numeric
 
 export type MintResult = { ok: true; lines: number } | { ok: false; reason: string };
 
+// How many credits a ticket carries: its fixed n, or per_pound times what was
+// paid (a ticket of any amount), to the whole credit.
+export function creditsFor(product: Product, amount_cents?: number): number | null {
+  const c = product.credits;
+  if (!c) return null;
+  if (c.n !== undefined) return c.n;
+  if (c.per_pound !== undefined && typeof amount_cents === 'number' && amount_cents > 0) return Math.floor((amount_cents / 100) * c.per_pound);
+  return null;
+}
+
 export async function mintAtPayment(
   ctx: AppContext,
   product: Product,
@@ -227,9 +244,12 @@ export async function mintAtPayment(
   buyer: string,
   pair_id: string,
   now: Date = new Date(),
+  amount_cents?: number,
 ): Promise<MintResult> {
   const c = product.credits;
   if (!c) return { ok: false, reason: 'no credits on this product' };
+  const n = creditsFor(product, amount_cents);
+  if (!n) return { ok: false, reason: 'credits per pound, and no amount paid to count them by' };
   const issuer = issuerOfProduct(ctx, product);
   const read = reader(ctx);
   const title = product.title ?? product.id;
@@ -241,18 +261,22 @@ export async function mintAtPayment(
       let words: (r: { to: string; n: number }) => string;
       const point = c.point ?? (c.to.startsWith('makers:') ? c.to.slice('makers:'.length) : '');
       if (c.to === 'buyer') {
-        to = [{ to: buyer, n: c.n }];
+        to = [{ to: buyer, n }];
         words = (r) => `${r.n} credits for ${r.to}, from their ticket '${title}', paid ${today(now)}`;
       } else if (c.to === 'pool') {
-        to = [{ to: fundOf(product), n: c.n }];
+        to = [{ to: fundOf(product), n }];
         words = (r) => `${r.n} credits into the fund for others' goes of ${point}, from a ticket '${title}' paid ${today(now)}: ${Math.floor(r.n / (c.go ?? 1))} goes for players who put nothing in`;
       } else if (c.to.startsWith('makers:')) {
-        to = equally(c.n, await makersOf(read, point));
+        to = equally(n, await makersOf(read, point));
         if (!to.length) throw new Error(`function:${point} names no makers`);
-        words = (r) => `${r.n} of ${c.n} credits to ${r.to}, a maker of ${point} (split equally), from a ticket '${title}' paid ${today(now)}`;
+        words = (r) => `${r.n} of ${n} credits to ${r.to}, a maker of ${point} (split equally), from a ticket '${title}' paid ${today(now)}`;
+      } else if (c.to.startsWith('https://')) {
+        const url = splitAddress(c.to, { credits: n, buyer, at: now.toISOString() });
+        to = await fetchedSplit(url, n);
+        words = (r) => `${r.n} of ${n} credits to ${r.to}, by the split at ${c.to.split('?')[0]} read ${now.toISOString()}, from a ticket '${title}' paid ${today(now)}`;
       } else {
-        to = await fetchedSplit(c.to, c.n);
-        words = (r) => `${r.n} of ${c.n} credits to ${r.to}, by the split at ${c.to} read ${now.toISOString()}, from a ticket '${title}' paid ${today(now)}`;
+        to = [{ to: c.to, n }];
+        words = (r) => `${r.n} credits to ${r.to}, from a ticket '${title}' paid ${today(now)}`;
       }
       let lines = 0;
       for (const r of to) {

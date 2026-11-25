@@ -68,10 +68,15 @@ export interface Product {
 //                   someone draws a go from it (POST /credits/draw)
 //   makers:<point>  straight to the makers the point's law names, split equally
 //                   (contract type one, point-creators)
-//   https://…       split as that address answers, { split: { <handle>: share } }
+//   https://…       split as that address answers, { split: { <handle>: share } },
+//                   with {credits}, {buyer} and {at} in the address filled in
 //                   (contract types two and three: a family's XP, the ecosystem's)
+//   <handle>        straight to one holder named here (the commons, say)
 export interface CreditsConfig {
-  n: number;
+  // How many credits the ticket carries: n for a fixed price, or per_pound
+  // times what was paid, for a ticket of any amount (one of the two).
+  n?: number;
+  per_pound?: number;
   to: string;
   // The point its credits are spent on: a family whose law (function:<point>)
   // names its makers on a line opening 'makers:'.

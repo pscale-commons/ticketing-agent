@@ -25,15 +25,17 @@ const priceSchema = z.discriminatedUnion('driver', [
 const POINT_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const creditsSchema = z
   .object({
-    n: z.number().int().positive(),
+    n: z.number().int().positive().optional(),
+    per_pound: z.number().positive().optional(),
     to: z.string().refine(
-      (t) => t === 'buyer' || t === 'pool' || /^makers:[a-z0-9][a-z0-9-]{0,63}$/.test(t) || /^https:\/\/\S+$/.test(t),
-      'credits.to is buyer, pool, makers:<point> or an https:// split',
+      (t) => t === 'buyer' || t === 'pool' || /^makers:[a-z0-9][a-z0-9-]{0,63}$/.test(t) || /^https:\/\/\S+$/.test(t) || /^[A-Za-z0-9_-]{2,64}$/.test(t),
+      'credits.to is buyer, pool, makers:<point>, an https:// split, or a handle',
     ),
     point: z.string().regex(POINT_RE, 'credits.point is a family name').optional(),
     free: z.number().int().positive().optional(),
     go: z.number().positive().optional(),
   })
+  .refine((c) => (c.n === undefined) !== (c.per_pound === undefined), 'credits carry n, or per_pound, and not both')
   .refine((c) => c.to !== 'pool' || (c.point && c.free && c.go), 'a pool names its point, its free goes per handle and what a go moves');
 
 const productSchema = z.object({

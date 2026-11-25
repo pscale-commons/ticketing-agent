@@ -14,7 +14,7 @@ import { derivePassphrase } from './grain-passphrase.js';
 import { buildTicket } from './envelope.js';
 import { establish } from './grain.js';
 import { deriveCollectivePassphrase } from './audit.js';
-import { mintAtPayment } from './credits.js';
+import { mintAtPayment, creditsFor } from './credits.js';
 import { randomUUID } from 'node:crypto';
 import type { AppContext, Product } from '../types.js';
 import type { PurchaseRow } from './db.js';
@@ -54,13 +54,14 @@ export async function issueGrain(input: IssueInput): Promise<IssueResult> {
   const issuer_bare = issuerOf(ctx, product);
   const buyer_bare = bareAgent(purchase.buyer_agent_id);
   const passphrase = derivePassphrase(ctx.env.TICKET_AGENT_SECRET, issuer_bare, buyer_bare);
+  const carried = creditsFor(product, input.amount_cents ?? purchase.amount_cents ?? undefined);
   const envelope = buildTicket({
     face: product.face,
     scope: product.scope,
     expires: ticketExpiry(now, product.duration_days),
     ...(product.tier ? { tier: product.tier } : {}),
     nonce: purchase.id,
-    ...(product.credits ? { credits: product.credits.n } : {}),
+    ...(carried ? { credits: carried } : {}),
   });
 
   try {
@@ -109,7 +110,7 @@ export async function issueGrain(input: IssueInput): Promise<IssueResult> {
     // writes what is missing, since each line carries the purchase it came from.
     let minted: number | undefined;
     if (product.credits) {
-      const m = await mintAtPayment(ctx, product, purchase.id, buyer_bare, grain.pair_id, now);
+      const m = await mintAtPayment(ctx, product, purchase.id, buyer_bare, grain.pair_id, now, input.amount_cents ?? purchase.amount_cents ?? undefined);
       if (m.ok) {
         minted = m.lines;
         ctx.log.info({ purchase_id: purchase.id, product_id: product.id, lines: m.lines }, 'credits written into the book');

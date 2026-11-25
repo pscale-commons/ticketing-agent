@@ -243,3 +243,53 @@ test('credits: a product read as JSON carries its issuer and credit terms, for t
   const plain = await s.app.request('/share/character-30d', { headers: { accept: 'application/json' } });
   assert.equal(((await plain.json()) as { credits?: unknown }).credits, undefined);
 });
+
+test('credits: a ticket of any amount carries per_pound times what was paid, straight to a named holder', async () => {
+  const COMMONS: Product = {
+    id: 'commons-topup', title: 'Top up the commons', issuer: 'arcade-credits', sed: 'sed:arcade-credits', face: 'character',
+    scope: 'frame:commons', duration_days: 36500, description: 'Any amount into the commons.',
+    price: { driver: 'stripe', stripe_price_id: 'price_any' }, credits: { per_pound: 1000, to: 'commons' },
+  };
+  const s = setup([...TEST_PRODUCTS, OWN, FUND, COMMONS]);
+  const res = await s.app.request('/buy/commons-topup', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ buyer_agent_id: 'ana' }) });
+  const { purchase_id } = (await res.json()) as { purchase_id: string };
+  s.driver.webhookEvents.set('sig:t', { kind: 'checkout-completed', driver_ref: `cs_${purchase_id}`, purchase_id, amount_cents: 250, currency: 'gbp' });
+  await s.app.request('/webhook/stripe', { method: 'POST', headers: { 'content-type': 'application/json', 'stripe-signature': 'sig:t' }, body: '{}' });
+  const [line] = linesOf(await s.read('credits:arcade-credits'));
+  assert.deepEqual([line!.to, line!.n], ['commons', 2500], '£2.50 at 1000 a pound, to the commons');
+  const reach = s.mcp.calls.find((c) => c.name === 'pscale_grain_reach')!;
+  assert.match(reach.args.my_side_content as string, /credits=2500\]$/);
+});
+
+test('credits: a split address is filled with the credits, the buyer and the moment paid', async () => {
+  const { splitAddress } = await import('../src/lib/credits.js');
+  assert.equal(
+    splitAddress('https://x.test/api/xp?family=o&credits={credits}&buyer={buyer}&at={at}', { credits: 1000, buyer: 'Ana B', at: '2026-11-25T17:00:00Z' }),
+    'https://x.test/api/xp?family=o&credits=1000&buyer=Ana%20B&at=2026-11-25T17%3A00%3A00Z',
+  );
+  const SUPPORT: Product = {
+    id: 'support', title: 'Support a phase', issuer: 'arcade-credits', sed: 'sed:arcade-credits', face: 'character',
+    scope: 'frame:o', duration_days: 36500, description: 'Support.', price: { driver: 'stripe', stripe_price_id: 'price_s' },
+    credits: { n: 1000, to: 'https://x.test/api/xp?family=o&credits={credits}&at={at}' },
+  };
+  const s = setup([...TEST_PRODUCTS, SUPPORT]);
+  const asked: string[] = [];
+  const real = globalThis.fetch;
+  globalThis.fetch = (async (url: string) => { asked.push(String(url)); return new Response(JSON.stringify({ split: { ana: 600, ben: 300, commons: 100 } }), { status: 200 }); }) as typeof fetch;
+  try { await buy(s, 'support', 'cy'); } finally { globalThis.fetch = real; }
+  assert.match(asked[0]!, /credits=1000&at=2026-/, 'a quiet buyer: the product\'s address names no {buyer}');
+  const held = balances(linesOf(await s.read('credits:arcade-credits')));
+  assert.deepEqual([held.get('ana'), held.get('ben'), held.get('commons')], [600, 300, 100]);
+});
+
+test('credits: config takes n or per_pound, never both and never neither', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'credits-'));
+  const base = `agent: { id: 'agent:t', secret_env: S, pscale_mcp_url: 'https://x/mcp' }\nproducts:\n`;
+  const p = (credits: string) => `${base}  - { id: c, sed: 'sed:c', face: character, scope: 'frame:m', duration_days: 1, description: d, price: { driver: stripe, stripe_price_id: p }, credits: ${credits} }\n`;
+  writeFileSync(join(dir, 'both.yaml'), p('{ n: 10, per_pound: 1000, to: buyer }'));
+  assert.throws(() => loadConfig(join(dir, 'both.yaml')), /n, or per_pound/);
+  writeFileSync(join(dir, 'neither.yaml'), p('{ to: buyer }'));
+  assert.throws(() => loadConfig(join(dir, 'neither.yaml')), /n, or per_pound/);
+  writeFileSync(join(dir, 'ok.yaml'), p('{ per_pound: 1000, to: commons }'));
+  assert.equal(loadConfig(join(dir, 'ok.yaml')).products[0]!.credits!.per_pound, 1000);
+});
