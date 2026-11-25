@@ -85,3 +85,31 @@ verifier:
     - sed:example-frame-designers
   # Tick interval. Default 5 seconds.
   poll_interval_seconds: 5
+
+# ── Credits (payway 2.27, sand-v2 2) ─────────────────────────────────
+# A ticket that carries credits: the moment it is paid the machine writes
+# them into the issuer's book, credits:<issuer>, which only it writes.
+# See the README's Credits section.
+#
+#  - id: example-credits
+#    title: "Credits for a game — 10 credits, £1"
+#    issuer: example-credits
+#    sed: sed:example-credits
+#    face: character
+#    scope: frame:example-game
+#    duration_days: 36500
+#    credits: { n: 10, to: buyer, point: example-game }
+#    back: https://example.com/games/example-game
+#    price: { driver: stripe, stripe_price_id: price_REPLACE_ME }
+#    description: "Ten credits for your own goes of the example game, a credit a go."
+#
+#  - id: example-goes
+#    title: "Goes for others — 10 goes, £1"
+#    issuer: example-credits
+#    sed: sed:example-credits
+#    face: character
+#    scope: frame:example-game
+#    duration_days: 36500
+#    credits: { n: 10, to: pool, point: example-game, free: 3, go: 1 }
+#    price: { driver: stripe, stripe_price_id: price_REPLACE_ME }
+#    description: "Ten free goes for players who put nothing in, three a player."

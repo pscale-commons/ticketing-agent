@@ -301,7 +301,7 @@ function renderEmailStep(product: Product, buyer_agent_id: string): string {
 </html>`;
 }
 
-function renderStatus(title: string, message: string, productId: string): string {
+function renderStatus(title: string, message: string, productId: string, back?: { url: string; label: string }): string {
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -316,7 +316,7 @@ function renderStatus(title: string, message: string, productId: string): string
 <body>
   <h1>${escapeHtml(title)}</h1>
   <p>${escapeHtml(message)}</p>
-  <p><a href="${SHARE}/${encodeURIComponent(productId)}">&larr; back</a> · <a href="/">catalogue</a></p>
+  <p>${back ? `<a href="${escapeHtml(back.url)}">&larr; ${escapeHtml(back.label)}</a>` : `<a href="${SHARE}/${encodeURIComponent(productId)}">&larr; back</a> · <a href="/">catalogue</a>`}</p>
 </body>
 </html>`;
 }
@@ -396,8 +396,11 @@ export function purchaseRoutes(ctx: AppContext): Hono {
           ? 'Thanks — your seat is on its way. In a minute it shows beside your character at happyseaurchin.com/models, and the world keeps moving for the beats it covers. You can close this tab.'
           : product.bank_transfer
           ? 'Thanks. If you paid by card, your ticket arrives on the beach shortly. If you chose a bank transfer, send it with the details Stripe gave you: your ticket arrives when the money lands. You can close this tab.'
+          : product.credits
+          ? 'Thanks. Your credits are written into the book as the payment lands, a moment from now.'
           : 'Thanks. Your ticket grain will arrive on the substrate shortly. You can close this tab.',
         product.id,
+        product.back ? { url: product.back, label: 'back to where you came from' } : undefined,
       ),
     );
   });
@@ -405,7 +408,7 @@ export function purchaseRoutes(ctx: AppContext): Hono {
   app.get('/:door{share|buy}/:id/cancel', (c) => {
     const product = findProduct(ctx, c.req.param('id'));
     if (!product) return c.json({ error: 'unknown_product' }, 404);
-    return c.html(renderStatus('Payment cancelled', 'No charge was made.', product.id));
+    return c.html(renderStatus('Payment cancelled', 'No charge was made.', product.id, product.back ? { url: product.back, label: 'back to where you came from' } : undefined));
   });
 
   return app;

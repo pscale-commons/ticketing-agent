@@ -50,6 +50,35 @@ export interface Product {
   // own bank details are never shown. Needs the payer's email before checkout;
   // until Stripe switches bank transfers on for the account, checkout is card.
   bank_transfer?: boolean;
+  // The ticket carries credits (payway 2.27, sand-v2 2): they are turned into
+  // credits the moment it is paid, and every move of them is written in order
+  // in the issuer's book, credits:<issuer>, which only this machine writes
+  // (lib/credits.ts). Absent: a ticket with no credits.
+  credits?: CreditsConfig;
+  // Where the success page sends the buyer back to, when they came from a page
+  // of their own (a game's frame): an https:// address, or http://localhost in
+  // a test run.
+  back?: string;
+}
+
+// What a credit-bearing ticket's credits do the moment it is paid. `to` names
+// who receives them then:
+//   buyer           the buyer's own credits, to spend on goes or give
+//   pool            a fund for others' goes: nothing reaches a person until
+//                   someone draws a go from it (POST /credits/draw)
+//   makers:<point>  straight to the makers the point's law names, split equally
+//                   (contract type one, point-creators)
+//   https://…       split as that address answers, { split: { <handle>: share } }
+//                   (contract types two and three: a family's XP, the ecosystem's)
+export interface CreditsConfig {
+  n: number;
+  to: string;
+  // The point its credits are spent on: a family whose law (function:<point>)
+  // names its makers on a line opening 'makers:'.
+  point?: string;
+  // A pool's draws: how many free goes one handle may draw, and what one go moves.
+  free?: number;
+  go?: number;
 }
 
 export type PriceConfig =
@@ -85,6 +114,10 @@ export interface AppContext {
   stripeDriver: PaymentDriver | null;
   giftDriver: PaymentDriver;
   manualDriver: PaymentDriver;
+  // How a block is read from the beach, as its JSON (null where none stands).
+  // Absent: a plain fetch of <beach>/.well-known/pscale-beach?block=<name>.
+  // Tests hand in a beach of their own.
+  readBlock?: (name: string) => Promise<Record<string, unknown> | null>;
 }
 
 export type { Env, Logger };

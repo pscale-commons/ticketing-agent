@@ -21,6 +21,21 @@ const priceSchema = z.discriminatedUnion('driver', [
   }),
 ]);
 
+// A credit-bearing ticket (types.ts CreditsConfig): what its credits do at payment.
+const POINT_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
+const creditsSchema = z
+  .object({
+    n: z.number().int().positive(),
+    to: z.string().refine(
+      (t) => t === 'buyer' || t === 'pool' || /^makers:[a-z0-9][a-z0-9-]{0,63}$/.test(t) || /^https:\/\/\S+$/.test(t),
+      'credits.to is buyer, pool, makers:<point> or an https:// split',
+    ),
+    point: z.string().regex(POINT_RE, 'credits.point is a family name').optional(),
+    free: z.number().int().positive().optional(),
+    go: z.number().positive().optional(),
+  })
+  .refine((c) => c.to !== 'pool' || (c.point && c.free && c.go), 'a pool names its point, its free goes per handle and what a go moves');
+
 const productSchema = z.object({
   id: z.string().min(1),
   issuer: z.string().regex(/^[a-zA-Z0-9_\-]{2,64}$/, 'issuer is a bare handle').optional(),
@@ -37,6 +52,8 @@ const productSchema = z.object({
   rate_limit: rateLimitSchema.optional(),
   price: priceSchema,
   description: z.string().min(1),
+  credits: creditsSchema.optional(),
+  back: z.string().regex(/^(https:\/\/|http:\/\/(localhost|127\.0\.0\.1)(:\d+)?\/)\S*$/, 'back is an https:// address, or http://localhost in a test run').optional(),
 });
 
 const configSchema = z.object({

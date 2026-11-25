@@ -14,6 +14,7 @@ import { derivePassphrase } from './grain-passphrase.js';
 import { buildTicket } from './envelope.js';
 import { establish } from './grain.js';
 import { deriveCollectivePassphrase } from './audit.js';
+import { mintAtPayment } from './credits.js';
 import { randomUUID } from 'node:crypto';
 import type { AppContext, Product } from '../types.js';
 import type { PurchaseRow } from './db.js';
@@ -43,7 +44,7 @@ export type IssueInput = {
 };
 
 export type IssueResult =
-  | { ok: true; pair_id: string; issuer_side: '1' | '2'; envelope: string; registered?: string }
+  | { ok: true; pair_id: string; issuer_side: '1' | '2'; envelope: string; registered?: string; minted?: number }
   | { ok: false; reason: string };
 
 export async function issueGrain(input: IssueInput): Promise<IssueResult> {
@@ -59,6 +60,7 @@ export async function issueGrain(input: IssueInput): Promise<IssueResult> {
     expires: ticketExpiry(now, product.duration_days),
     ...(product.tier ? { tier: product.tier } : {}),
     nonce: purchase.id,
+    ...(product.credits ? { credits: product.credits.n } : {}),
   });
 
   try {
@@ -101,7 +103,24 @@ export async function issueGrain(input: IssueInput): Promise<IssueResult> {
     const registered = product.register_buyer
       ? await registerBuyer(ctx, product, buyer_bare, input.line, now, purchase.id, input.amount_cents ?? purchase.amount_cents ?? undefined)
       : undefined;
-    return { ok: true, pair_id: grain.pair_id, issuer_side: grain.issuer_side, envelope, ...(registered ? { registered } : {}) };
+    // A TICKET'S CREDITS, THE MOMENT IT IS PAID (David, 25 Nov 2026: not
+    // monthly), written into the issuer's book now. A book that cannot be
+    // written never undoes the ticket: the failure is logged, and a reissue
+    // writes what is missing, since each line carries the purchase it came from.
+    let minted: number | undefined;
+    if (product.credits) {
+      const m = await mintAtPayment(ctx, product, purchase.id, buyer_bare, grain.pair_id, now);
+      if (m.ok) {
+        minted = m.lines;
+        ctx.log.info({ purchase_id: purchase.id, product_id: product.id, lines: m.lines }, 'credits written into the book');
+      } else {
+        ctx.log.error({ purchase_id: purchase.id, product_id: product.id, reason: m.reason }, 'credits NOT written — ticket stands; reissue to write them');
+      }
+    }
+    return {
+      ok: true, pair_id: grain.pair_id, issuer_side: grain.issuer_side, envelope,
+      ...(registered ? { registered } : {}), ...(minted !== undefined ? { minted } : {}),
+    };
   } catch (err) {
     ctx.db
       .prepare("UPDATE purchases SET status = 'failed', notes = ? WHERE id = ?")

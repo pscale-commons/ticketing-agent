@@ -302,7 +302,7 @@ test('verifier: rule 7 rejection — issuer mismatch', async () => {
   assert.equal(getDecision(ctx, '11')!.reason, 'issuer-mismatch');
 });
 
-test('verifier: rule 8 rejection — credits= field reserved', async () => {
+test('verifier: rule 8, inverted in v2 — a credit-bearing ticket is verified like any other', async () => {
   const { ctx, mcp } = ctxWithCollective();
   setUpCollective(mcp, {
     face: 'character',
@@ -310,13 +310,14 @@ test('verifier: rule 8 rejection — credits= field reserved', async () => {
     issuer: 'agent:tickets-test',
     positions: { '11': makeRegistration(`grain:${PAIR_ID}:1`) },
   });
-  // Manually craft envelope with credits= since builder doesn't permit it.
+  // sand-v2 2.1: v2 verifiers honour credits=; what the credits do is the
+  // issuer's book's (lib/credits.ts), never the verifier's.
   mcp.setBlock(`grain:${PAIR_ID}`, 'grain', {
     '1': { _: '[ticket face=character scope=frame:test expires=' + FUTURE + ' credits=10]' },
     '9': { '1': ISSUER_BARE, '2': 'brisa' },
   });
   await runOnce(ctx);
-  assert.equal(getDecision(ctx, '11')!.reason, 'credits-not-supported');
+  assert.equal(getDecision(ctx, '11')!.decision, 'verified');
 });
 
 test('verifier: position without ticket_grain ref is skipped', async () => {

@@ -265,11 +265,10 @@ async function processOne(
     return;
   }
 
-  // Rule 8 — no `credits=` field.
-  if (parsed.hasCredits) {
-    await rejectAndAudit(ctx, collectiveAddr, position, grain_ref, registration_ref, 'credits-not-supported', now, stats);
-    return;
-  }
+  // Rule 8, inverted in v2 (sand-v2 2.1): a `credits=` field no longer
+  // refuses a ticket. What its credits do is kept in the issuer's book
+  // (lib/credits.ts), never decided here: the face a ticket grants and the
+  // credits it carries are separate (sand-v2 2.2).
 
   // All eight rules pass.
   await verifyAndAudit(ctx, collectiveAddr, position, grain_ref, registration_ref, parsed.expires, now, stats);

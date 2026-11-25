@@ -4,6 +4,7 @@ import { catalogueRoutes } from './routes/catalogue.js';
 import { purchaseRoutes } from './routes/purchase.js';
 import { webhookRoutes } from './routes/webhook.js';
 import { adminRoutes } from './routes/admin.js';
+import { creditsRoutes } from './routes/credits.js';
 
 export function createApp(ctx: AppContext): Hono {
   const app = new Hono();
@@ -20,6 +21,7 @@ export function createApp(ctx: AppContext): Hono {
   app.route('/', catalogueRoutes(ctx));
   app.route('/', purchaseRoutes(ctx));
   app.route('/', webhookRoutes(ctx));
+  app.route('/', creditsRoutes(ctx));
   app.route('/admin', adminRoutes(ctx));
 
   // Refund route — wired in M5.

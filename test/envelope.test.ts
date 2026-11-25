@@ -56,13 +56,14 @@ test('ticket: beach scope', () => {
   assert.equal(parsed.kind, 'ticket');
 });
 
-test('ticket: credits= reserved field is parsed but flagged', () => {
-  // Per protocol §2.4 rule 8: v1 verifiers MUST reject credit-bearing grains.
+test('ticket: credits= is the SAND mint field, parsed with its number (payway 2.27, sand-v2 2)', () => {
   const parsed = parseEnvelope('[ticket face=character scope=frame:x expires=2026-06-01T00:00:00Z credits=10]');
   assert.equal(parsed.kind, 'ticket');
   if (parsed.kind === 'ticket') {
     assert.equal(parsed.hasCredits, true);
+    assert.equal(parsed.credits, 10);
   }
+  assert.equal(parseEnvelope('[ticket face=character scope=frame:x expires=2026-06-01T00:00:00Z credits=ten]').kind, 'parse-error');
 });
 
 test('ticket: missing required fields rejected', () => {

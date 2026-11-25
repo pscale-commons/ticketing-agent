@@ -8,3 +8,5 @@ data/
 .DS_Store
 *.log
 config/agent.yaml
+.env.test
+config/agent.test.yaml

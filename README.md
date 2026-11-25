@@ -151,6 +151,8 @@ verifier:
 - `GET /share/:product_id/{success,cancel}` — minimal landing pages.
 - `POST /webhook/stripe` — Stripe Checkout Session webhook. Signature-verified, idempotent, rate-limited at issuance time.
 - `GET /health` — agent identity + product count.
+- `POST /credits/draw` — `{ product, holder }`: a free go for `holder`, drawn from a credit product's fund (`credits.to: pool`) up to its cap a handle. Answers CORS.
+- `POST /credits/spend` — `{ issuer, holder, probe }`: move the gift `holder` wrote at `passport:<holder>` 6.3 under the probe id, as far as the issuer's book says they hold. Answers CORS.
 
 ### Admin (require `Authorization: Bearer <ADMIN_TOKEN>`)
 
@@ -161,6 +163,30 @@ verifier:
 - `POST /admin/mark-paid/:id` — operator confirms a manual (bank transfer) purchase has cleared. Issues the grain and marks the row paid. Body: `{ notes }` (optional).
 - `POST /admin/reissue/:id` — write the ticket for a purchase that was paid but whose grain failed to land (`status: failed`, e.g. bsp-mcp unreachable at the moment of payment). Marks the row paid on success. `:id` is the purchase id or the Stripe invoice (`in_…`) / checkout session (`cs_…`); when the machine holds no row for it at all, the sale is read back from Stripe. Body: `{ notes }` (optional).
 - `POST /admin/invoice` — raise a Stripe invoice for an invoice-priced product. Body: `{ product_id, buyer_agent_id, email, name?, amount_cents, description, send? }` (`amount_cents` in the currency's minor unit; `send: true` finalises and emails it, otherwise a draft waits in the dashboard).
+
+## Credits
+
+A product may carry credits (payway 2.27, sand-v2 2). Its ticket's envelope then carries `credits=<n>`, and the moment it is paid the machine writes what those credits do into the issuer's **book**, `credits:<issuer>`: an ordinary block on the beach, founded latched to a key derived from `TICKET_AGENT_SECRET` and written by this machine alone, one line a move to each recipient, in the order the machine took them. Nobody's credits are a number kept anywhere: anyone reads the book and adds up what came to a holder and what went from them, in order.
+
+Why the issuer keeps the order: a balance read from lines a holder writes about themselves holds nothing (one receipt in your own passport makes credit, one credit spends twice, any grain mints; pool:experience-points 2 on the beach, 25 Nov 2026). Credits that money bought need one keeper of their order, and the one who took the money is already trusted with it.
+
+```yaml
+credits:
+  n: 10                 # credits the ticket carries
+  to: buyer             # buyer | pool | makers:<point> | https://… (a split)
+  point: migration      # the family its credits are spent on: function:<point> names its makers ('makers: …')
+  free: 3               # a pool only: free goes one handle may draw
+  go: 1                 # a pool only: what one go moves
+```
+
+- `to: buyer` — the buyer's own credits.
+- `to: pool` — a fund for others' goes: nothing reaches a person until someone draws a free go (`POST /credits/draw`), which moves `go` credits to the point's makers, split equally, at most `free` a handle.
+- `to: makers:<point>` — straight to the makers the point's law names, split equally (contract type one, point-creators).
+- `to: https://…` — split as that address answers, `{ "split": { "<handle>": share, … } }` (contract types two and three: a family's XP, the ecosystem's).
+
+A holder moves their own credits by writing a gift at their passport's 6.3 (sand-v2 3.1: `{_, 1: probe id, 2: n, 3: to, 5: when}`, `to` a handle or `function:<point>` for a go of that point) and asking `POST /credits/spend`; the machine moves it only as far as the book says they hold, once, and in order with every other move. Each line of the book is a gift in sand-v2's shape: `1` the move's id, `2` n, `3` to, `4` the point, `5` when, `6` from (`grain:<pair_id>`, `fund:<product>` or a handle), `7` its warrant (`ticket <purchase id>`, the handle a free go was for, or `passport:<holder> 6.3<slot>`).
+
+`back:` on a product puts a link back to the page the buyer came from on the success page.
 
 ## Driver flows
 
@@ -193,7 +219,7 @@ The 24-hour `issued_at` window prevents replay of stale signatures; the `nonce` 
 
 Runs in-process. On each tick (default every 5 seconds):
 
-1. **Process collective**: for each watched `sed:` collective with a `_tickets` field, walk its registrations, find positions whose sub-position 1 is a `grain:<pair_id>:<side>` reference, and apply the eight-rule check from §2.4 of the protocol — face match, scope compat, expires in future, no revocation, issuer matches `_tickets.issuer`, no `credits=` field, etc. Write `[ticket-verified]` or `[ticket-rejected reason=...]` to the audit collective.
+1. **Process collective**: for each watched `sed:` collective with a `_tickets` field, walk its registrations, find positions whose sub-position 1 is a `grain:<pair_id>:<side>` reference, and apply the eight-rule check from §2.4 of the protocol — face match, scope compat, expires in future, no revocation, issuer matches `_tickets.issuer`, etc. (A `credits=` field no longer refuses a ticket: rule 8 is inverted in v2, sand-v2 2.1.) Write `[ticket-verified]` or `[ticket-rejected reason=...]` to the audit collective.
 2. **Revocation sweep**: for each previously-verified row whose grain now carries a `[ticket-revoked]` envelope, write a fresh `[ticket-rejected reason=revoked]`.
 3. **Expiry sweep**: for each previously-verified row whose `expires_at` has passed, write `[ticket-expired]`.
 

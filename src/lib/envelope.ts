@@ -1,14 +1,15 @@
 // Envelope grammar per payway.md §2.2 / §2.3 / §2.4.
 //
-//   [ticket face=<face> scope=<scope> expires=<iso8601> (tier=...)? (seats=...)? (nonce=...)?]
+//   [ticket face=<face> scope=<scope> expires=<iso8601> (tier=...)? (seats=...)? (nonce=...)? (credits=...)?]
 //   [ticket-revoked at=<iso8601> reason=<short>]
 //   [ticket-verified by=agent:<verifier-id> at=<iso8601>]
 //   [ticket-rejected by=agent:<verifier-id> at=<iso8601> reason=<short>]
 //   [ticket-expired at=<iso8601>]
 //
-// `credits=<n>` is reserved (§2.2). v1 verifiers MUST reject any [ticket]
-// envelope containing it (§2.4 rule 8). The parser surfaces it via
-// `hasCredits` so the caller (verifier) can write the right rejection.
+// `credits=<n>` is the SAND mint field (payway 2.27, sand-v2 2): a ticket that
+// carries it is credit-bearing. v1 rejected it pending a spend path (rule 8);
+// v2 honours it (sand-v2 2.1), and this machine keeps what its credits do in
+// the issuer's book (lib/credits.ts). The parser surfaces it as `credits`.
 //
 // One module. Parse, build, round-trip. No class hierarchy, no validator
 // framework — eight `if`s for verification belong in lib/grain.ts (M4),
@@ -27,6 +28,7 @@ export type TicketEnvelope = {
   seats?: number;
   nonce?: string;
   hasCredits: boolean;
+  credits?: number;
 };
 
 export type TicketRevokedEnvelope = {
@@ -122,6 +124,12 @@ export function parseEnvelope(text: string): ParseResult {
       if (Object.keys(rest).length > 0) {
         return { kind: 'parse-error', reason: `unknown-field:${Object.keys(rest)[0]}` };
       }
+      let creditsN: number | undefined;
+      if (credits !== undefined) {
+        const n = Number(credits);
+        if (!Number.isInteger(n) || n < 1) return { kind: 'parse-error', reason: 'bad-credits' };
+        creditsN = n;
+      }
       const env: TicketEnvelope = {
         kind: 'ticket',
         face: face as Face,
@@ -129,6 +137,7 @@ export function parseEnvelope(text: string): ParseResult {
         expires,
         hasCredits: credits !== undefined,
       };
+      if (creditsN !== undefined) env.credits = creditsN;
       if (tier) env.tier = tier as Tier;
       if (seatsN !== undefined) env.seats = seatsN;
       if (nonce) env.nonce = nonce;
@@ -203,6 +212,7 @@ export type BuildTicketInput = {
   tier?: Tier;
   seats?: number;
   nonce?: string;
+  credits?: number;
 };
 
 export function buildTicket(input: BuildTicketInput): string {
@@ -218,6 +228,10 @@ export function buildTicket(input: BuildTicketInput): string {
   if (input.nonce !== undefined) {
     ensureNoSpace('nonce', input.nonce);
     parts.push(`nonce=${input.nonce}`);
+  }
+  if (input.credits !== undefined) {
+    if (!Number.isInteger(input.credits) || input.credits < 1) throw new Error('credits must be a positive integer');
+    parts.push(`credits=${input.credits}`);
   }
   return `[ticket ${parts.join(' ')}]`;
 }
