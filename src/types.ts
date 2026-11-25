@@ -50,6 +50,23 @@ export interface Product {
   // own bank details are never shown. Needs the payer's email before checkout;
   // until Stripe switches bank transfers on for the account, checkout is card.
   bank_transfer?: boolean;
+  // CREDITS minted at the moment of payment (sand-v2 2, mint-as-gave, as
+  // ruled 25 August 2026): every pound paid becomes `per_pound` credits. The
+  // ticket carries the whole it backs (credits=N, payway 2.27), the audit log
+  // marks it verified, and the issuer gives the credits in one gift on its own
+  // passport at 6.3 — to `to`, a handle such as the beach's commons, else to
+  // the buyer — filed at `topic`, where the receiver keeps its receipt. Where
+  // the credits go after that is the receiving handle's own law: the contract
+  // (one, a game's makers; two, a product's four columns; three, everyone's
+  // four columns) lives with the pot, never in the ticket. A credit is never
+  // paid back out as money (sand-v2 1.3).
+  credits?: CreditsConfig;
+}
+
+export interface CreditsConfig {
+  per_pound: number;
+  to?: string;
+  topic?: string;
 }
 
 export type PriceConfig =

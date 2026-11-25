@@ -6,9 +6,13 @@
 //   [ticket-rejected by=agent:<verifier-id> at=<iso8601> reason=<short>]
 //   [ticket-expired at=<iso8601>]
 //
-// `credits=<n>` is reserved (§2.2). v1 verifiers MUST reject any [ticket]
-// envelope containing it (§2.4 rule 8). The parser surfaces it via
-// `hasCredits` so the caller (verifier) can write the right rejection.
+// `credits=<n>` is the SAND mint field (payway 2.27, lit by sand-v2 2.1): the
+// whole number of credits the ticket backs. This machine writes it only on a
+// product that mints (Product.credits), and the credits themselves are given
+// on the issuer's passport, each gift naming this grain (issuance.ts). Its own
+// verifier still rejects credits= on a ticket registered into a collective
+// (§2.4 rule 8): rule 8 guards a face ticket, and a credit ticket is never
+// registered anywhere. The parser surfaces it via `hasCredits`.
 //
 // One module. Parse, build, round-trip. No class hierarchy, no validator
 // framework — eight `if`s for verification belong in lib/grain.ts (M4),
@@ -203,6 +207,7 @@ export type BuildTicketInput = {
   tier?: Tier;
   seats?: number;
   nonce?: string;
+  credits?: number;
 };
 
 export function buildTicket(input: BuildTicketInput): string {
@@ -218,6 +223,10 @@ export function buildTicket(input: BuildTicketInput): string {
   if (input.nonce !== undefined) {
     ensureNoSpace('nonce', input.nonce);
     parts.push(`nonce=${input.nonce}`);
+  }
+  if (input.credits !== undefined) {
+    if (!Number.isInteger(input.credits) || input.credits < 1) throw new Error('credits must be a positive integer');
+    parts.push(`credits=${input.credits}`);
   }
   return `[ticket ${parts.join(' ')}]`;
 }

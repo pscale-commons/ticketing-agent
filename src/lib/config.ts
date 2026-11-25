@@ -37,6 +37,13 @@ const productSchema = z.object({
   rate_limit: rateLimitSchema.optional(),
   price: priceSchema,
   description: z.string().min(1),
+  credits: z
+    .object({
+      per_pound: z.number().int().positive(),
+      to: z.string().regex(/^[a-zA-Z0-9_\-]{2,64}$/, 'credits.to is a bare handle').optional(),
+      topic: z.string().regex(/^0\.[1-9]{1,9}$/, 'credits.topic is a topic coordinate such as 0.1').optional(),
+    })
+    .optional(),
 });
 
 const configSchema = z.object({

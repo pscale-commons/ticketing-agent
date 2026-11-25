@@ -11,9 +11,9 @@
 // rolls back to "purchase failed" path needs the same UPDATE.
 
 import { derivePassphrase } from './grain-passphrase.js';
-import { buildTicket } from './envelope.js';
+import { buildTicket, buildVerified } from './envelope.js';
 import { establish } from './grain.js';
-import { deriveCollectivePassphrase } from './audit.js';
+import { appendDecision, deriveCollectivePassphrase } from './audit.js';
 import { randomUUID } from 'node:crypto';
 import type { AppContext, Product } from '../types.js';
 import type { PurchaseRow } from './db.js';
@@ -43,8 +43,31 @@ export type IssueInput = {
 };
 
 export type IssueResult =
-  | { ok: true; pair_id: string; issuer_side: '1' | '2'; envelope: string; registered?: string }
+  | { ok: true; pair_id: string; issuer_side: '1' | '2'; envelope: string; registered?: string; minted?: string }
   | { ok: false; reason: string };
+
+// The credits a payment mints: every whole penny counts, rounded down, so £5
+// at 1,000 a pound is 5,000. Nothing is minted without an amount.
+export function creditsFor(product: Product, amount_cents: number | undefined | null): number {
+  if (!product.credits || !amount_cents || amount_cents <= 0) return 0;
+  return Math.floor((amount_cents * product.credits.per_pound) / 100);
+}
+
+// One grain stands per (issuer, buyer) pair, so a buyer's second top-up
+// re-reaches the same ticket. Its credits= is therefore the WHOLE the grain
+// backs — every earlier paid mint on it and this one — since a reader nets
+// every gift citing the grain against that number (bsp-mcp verifyGrainMint).
+function mintedBefore(ctx: AppContext, issuer: string, purchase: PurchaseRow): number {
+  const rows = ctx.db
+    .prepare("SELECT product_id, amount_cents FROM purchases WHERE buyer_agent_id = ? AND status = 'paid' AND id != ?")
+    .all(purchase.buyer_agent_id, purchase.id) as Array<{ product_id: string; amount_cents: number | null }>;
+  let n = 0;
+  for (const r of rows) {
+    const p = ctx.config.products.find((x) => x.id === r.product_id);
+    if (p && p.credits && issuerOf(ctx, p) === issuer) n += creditsFor(p, r.amount_cents);
+  }
+  return n;
+}
 
 export async function issueGrain(input: IssueInput): Promise<IssueResult> {
   const { ctx, purchase, product } = input;
@@ -53,12 +76,14 @@ export async function issueGrain(input: IssueInput): Promise<IssueResult> {
   const issuer_bare = issuerOf(ctx, product);
   const buyer_bare = bareAgent(purchase.buyer_agent_id);
   const passphrase = derivePassphrase(ctx.env.TICKET_AGENT_SECRET, issuer_bare, buyer_bare);
+  const minting = creditsFor(product, input.amount_cents ?? purchase.amount_cents);
   const envelope = buildTicket({
     face: product.face,
     scope: product.scope,
     expires: ticketExpiry(now, product.duration_days),
     ...(product.tier ? { tier: product.tier } : {}),
     nonce: purchase.id,
+    ...(minting > 0 ? { credits: minting + mintedBefore(ctx, issuer_bare, purchase) } : {}),
   });
 
   try {
@@ -101,7 +126,13 @@ export async function issueGrain(input: IssueInput): Promise<IssueResult> {
     const registered = product.register_buyer
       ? await registerBuyer(ctx, product, buyer_bare, input.line, now, purchase.id, input.amount_cents ?? purchase.amount_cents ?? undefined)
       : undefined;
-    return { ok: true, pair_id: grain.pair_id, issuer_side: grain.issuer_side, envelope, ...(registered ? { registered } : {}) };
+    const minted = minting > 0
+      ? await mintCredits(ctx, product, issuer_bare, buyer_bare, purchase.id, grain.pair_id, minting, now, input.amount_cents ?? purchase.amount_cents ?? 0)
+      : undefined;
+    return {
+      ok: true, pair_id: grain.pair_id, issuer_side: grain.issuer_side, envelope,
+      ...(registered ? { registered } : {}), ...(minted ? { minted } : {}),
+    };
   } catch (err) {
     ctx.db
       .prepare("UPDATE purchases SET status = 'failed', notes = ? WHERE id = ?")
@@ -246,6 +277,113 @@ async function appendToList(
     ctx.log.error({ purchase_id, product_id: product.id, buyer, err: (err as Error).message }, 'list entry FAILED — ticket stands; write it by hand');
     return undefined;
   }
+}
+
+// THE MINT (sand-v2 2, mint-as-gave): the credits a payment buys come into
+// being as one gift on the issuer's own passport at 6.3 — {_ its voicing,
+// 1 probe id, 2 n, 3 to, 4 topic, 5 stamp, 6 the grain, 7 its audit line} —
+// the shape bsp-mcp's sand.ts reads. Three writes, in the order a reader
+// checks them (verifyGrainMint): the ticket already carries credits=N; the
+// audit log marks that grain verified; the gift names both. The passport is
+// founded latched to a key derived from TICKET_AGENT_SECRET the first time,
+// as the machine's lists are, so no other hand can give in the mint's name.
+// A mint that cannot be written never undoes the ticket: the grain backs the
+// credits, and the failure is logged for the operator to give them by hand.
+// The voicing names what was paid into and the sum, never the payer.
+async function mintCredits(
+  ctx: AppContext,
+  product: Product,
+  issuer: string,
+  buyer: string,
+  purchase_id: string,
+  pair_id: string,
+  n: number,
+  now: Date,
+  amount_cents: number,
+): Promise<string | undefined> {
+  const beach = ctx.config.agent.beach ?? 'https://beach.happyseaurchin.com';
+  const to = product.credits?.to ?? buyer;
+  const topic = product.credits?.topic ?? '0.1';
+  const grainRef = `grain:${pair_id}`;
+  const at = now.toISOString().replace(/\.\d+Z$/, 'Z');
+  const block = `passport:${issuer}`;
+  const key = deriveCollectivePassphrase(ctx.env.TICKET_AGENT_SECRET, block, 'entry');
+  try {
+    const audit = await appendDecision({
+      client: ctx.mcp,
+      ticketAgentSecret: ctx.env.TICKET_AGENT_SECRET,
+      verifier_bare_id: bareAgent(ctx.config.agent.id),
+      envelope: buildVerified({ by: ctx.config.agent.id, at, grain: grainRef }),
+      date: now,
+    });
+    const auditRef = `sed:${audit.audit_block}:${audit.audit_position}`;
+    await ctx.mcp.callTool('bsp', {
+      agent_id: beach, block, new_lock: key,
+      content: {
+        _: `${issuer} — a mint of the ticket machine: the one place money paid at it becomes credits (sand-v2 1.1). Every gift at 6.3 is backed by the ticket grain it names and the audit line that marks it verified, never by this ledger's balance, which reads as negative as the credits it has put into circulation. Written by the machine alone, under its own key.`,
+        '6': { _: 'The SAND ledgers (sand-v2): 3, the mint’s gifts.', '3': { _: 'Every credit this mint has given, in the order given.' } },
+      },
+    }).catch(() => '');
+    const pounds = `£${(amount_cents / 100).toFixed(2)}`;
+    const address = await appendOnShelf(ctx, beach, block, key, {
+      _: `minted ${n} to ${to} — ${product.title ?? product.id}, ${pounds} paid at the ticket machine; these credits stand on ${grainRef} and its audit line, not on this ledger's balance`,
+      '1': `mint-${purchase_id}`,
+      '2': n,
+      '3': to,
+      '4': topic,
+      '5': at,
+      '6': grainRef,
+      '7': auditRef,
+    });
+    ctx.log.info({ purchase_id, product_id: product.id, n, to, address: `${block}:${address}`, audit: auditRef }, 'credits minted');
+    return `${block}:${address}`;
+  } catch (err) {
+    ctx.log.error({ purchase_id, product_id: product.id, n, to, err: (err as Error).message }, 'mint FAILED — ticket stands and backs the credits; give them by hand');
+    return undefined;
+  }
+}
+
+// A GIFT ON A SHELF: a digit position holds nine and never grows (the beach
+// refuses a tenth append beneath it, node_full), and a gift's own fields fill
+// the digits beneath it, so gifts appended straight under 6.3 would stop at
+// nine. They go on shelves instead — 6.31 holds the first nine, 6.32 the next
+// — eighty-one in all, each shelf founded the first time it is needed. A
+// shelf is no gift, so every reader walks through it (bsp-mcp collectGaves).
+// The append only ALLOCATES the slot: the beach stamps an appended entry's
+// field 3 with its arrival time unless 3 already holds a date (block-
+// conventions 4.22), and a gift keeps its recipient at 3, so the gift is then
+// written whole at the address it landed in, which is never stamped.
+async function appendOnShelf(
+  ctx: AppContext,
+  beach: string,
+  block: string,
+  key: string,
+  content: Record<string, unknown>,
+): Promise<string> {
+  const landed = (text: string) => /→\s*([0-9.]+)/.exec(text)?.[1];
+  const settle = async (address: string) => {
+    const text = await ctx.mcp.callTool('bsp', { agent_id: beach, block, spindle: address, secret: key, content });
+    if (/rejected|refused/i.test(text)) throw new Error(`the gift at ${address} could not be written whole: ${text.slice(0, 160)}`);
+    return address;
+  };
+  for (let k = 1; k <= 9; k++) {
+    const spindle = `6.3${k}`;
+    const put = () => ctx.mcp.callTool('bsp', { agent_id: beach, block, spindle, append: true, secret: key, content });
+    let text = await put();
+    let at = landed(text);
+    if (at) return settle(at);
+    if (/no node at|not_found/i.test(text)) {
+      await ctx.mcp.callTool('bsp', {
+        agent_id: beach, block, spindle, secret: key,
+        content: { _: `Shelf ${k} of the mint's gifts: nine to a shelf, in the order given.` },
+      });
+      text = await put();
+      at = landed(text);
+      if (at) return settle(at);
+    }
+    if (!/node_full|is full/i.test(text)) throw new Error(text.slice(0, 200));
+  }
+  throw new Error(`${block} 6.3 is full: nine shelves of nine gifts`);
 }
 
 // The place-value of a sum's first digit, in whole pounds: £50 → 1, £500 → 2,
