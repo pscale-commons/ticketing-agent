@@ -184,7 +184,7 @@ credits:
 - `to: makers:<point>` — straight to the makers the point's law names, split equally (contract type one, point-creators).
 - `to: https://…` — split as that address answers, `{ "split": { "<handle>": share, … } }` (contract types two and three: a family's XP, the ecosystem's).
 
-A holder moves their own credits by writing a gift at their passport's 6.3 (sand-v2 3.1: `{_, 1: probe id, 2: n, 3: to, 5: when}`, `to` a handle or `function:<point>` for a go of that point) and asking `POST /credits/spend`; the machine moves it only as far as the book says they hold, once, and in order with every other move. Each line of the book is a gift in sand-v2's shape: `1` the move's id, `2` n, `3` to, `4` the point, `5` when, `6` from (`grain:<pair_id>`, `fund:<product>` or a handle), `7` its warrant (`ticket <purchase id>`, the handle a free go was for, or `passport:<holder> 6.3<slot>`).
+A holder moves their own credits by writing a gift at their passport's 6.3 (sand-v2 3.1: `{_, 1: probe id, 2: n, 3: to, 5: when}`, `to` a handle or `function:<point>` for a go of that point) and asking `POST /credits/spend`; the machine moves it only as far as the book says they hold, once, and in order with every other move. Each line of the book is a gift in sand-v2's shape with its time and recipient swapped, since the book is an accumulator and the beach's accumulator law makes an appended entry's `3` its time: `1` the move's id, `2` n, `3` when, `4` the point, `5` to, `6` from (`grain:<pair_id>`, `fund:<product>` or a handle), `7` its warrant (`ticket <purchase id>`, the handle a free go was for, or `passport:<holder> 6.3<slot>`).
 
 `back:` on a product puts a link back to the page the buyer came from on the success page.
 

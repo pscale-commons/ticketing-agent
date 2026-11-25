@@ -13,13 +13,17 @@
 // 3, the out-ledger), and nobody's credits are a number kept anywhere: anyone
 // reads the book and works them out (sand-v2 3.4, computed on read).
 //
-// EACH LINE IS A GIFT in sand-v2's shape (3.1), one recipient a line:
+// EACH LINE IS A GIFT in sand-v2's shape (3.1), one recipient a line, with its
+// time at 3 and its recipient at 5 where a passport's gift has them the other
+// way round: the book is an accumulator, and the beach's accumulator law makes
+// an appended entry's 3 its time, stamping any 3 that is not one (ways of the
+// beach, pscale-beach stampAppendTimestamp: 'position 3 authoritative for recency').
 //   _  what moved, to whom and why, in words (a payer of a fund or a point is never named)
 //   1  the move's id: a purchase, the holder's gift (its probe id), or a free go
 //   2  the credits it moves
-//   3  to: a handle, or fund:<product> (a pool for others' goes)
+//   3  when it was written
 //   4  the point it moved on (a family, as migration), where it has one
-//   5  when it was written
+//   5  to: a handle, or fund:<product> (a pool for others' goes)
 //   6  from: grain:<pair_id> (a ticket's credits), fund:<product>, or a handle
 //   7  what warrants it: 'ticket <purchase id>' for a ticket's credits; the handle
 //      a free go was drawn for; 'passport:<holder> 6.3<slot>' for a holder's gift
@@ -83,15 +87,15 @@ export function linesOf(book: Block | null): Line[] {
   (function walk(node: unknown, path: string) {
     if (!node || typeof node !== 'object' || Array.isArray(node)) return;
     const e = node as Block;
-    if (typeof e['1'] === 'string' && typeof e['2'] === 'number' && typeof e['3'] === 'string' && typeof e['6'] === 'string') {
+    if (typeof e['1'] === 'string' && typeof e['2'] === 'number' && typeof e['5'] === 'string' && typeof e['6'] === 'string') {
       out.push({
         slot: path.replace(/^0+/, '') || '0',
         voicing: typeof e['_'] === 'string' ? e['_'] : '',
         id: e['1'],
         n: e['2'],
-        to: e['3'],
+        to: e['5'],
         point: typeof e['4'] === 'string' ? e['4'] : '',
-        at: typeof e['5'] === 'string' ? e['5'] : '',
+        at: typeof e['3'] === 'string' ? e['3'] : '',
         from: e['6'],
         warrant: typeof e['7'] === 'string' ? e['7'] : '',
       });
@@ -194,11 +198,11 @@ async function found(ctx: AppContext, issuer: string): Promise<void> {
 async function write(ctx: AppContext, issuer: string, line: Omit<Line, 'slot'>): Promise<string> {
   const beach = beachOf(ctx), block = bookOf(issuer);
   const key = deriveCollectivePassphrase(ctx.env.TICKET_AGENT_SECRET, block, 'entry');
-  const content: Block = { _: line.voicing, '1': line.id, '2': line.n, '3': line.to, '5': line.at, '6': line.from };
+  const content: Block = { _: line.voicing, '1': line.id, '2': line.n, '3': line.at, '5': line.to, '6': line.from };
   if (line.point) content['4'] = line.point;
   if (line.warrant) content['7'] = line.warrant;
   const text = await ctx.mcp.callTool('bsp', { agent_id: beach, block, append: true, content, secret: key });
-  const m = /→\s*([0-9.]+)/.exec(text);
+  const m = /→\s*(?:slot\s*)?([0-9.]+)/.exec(text);   // the beach answers '→ slot 1', an older router '→ 1'
   if (!m) throw new Error(`the book ${block} took no line: ${text.slice(0, 200)}`);
   return m[1]!;
 }

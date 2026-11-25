@@ -50,7 +50,7 @@ function beach() {
       const n = Object.keys(b).filter((k) => /^[1-9]$/.test(k)).length + 1;
       assert.ok(n <= 9, 'a test book stays under nine lines');
       b[String(n)] = args.content as Record<string, unknown>;
-      return `[append @ "https://beach.test/${name}" → ${n} (slot ${n})]`;
+      return `[append @ "https://beach.test/${name}" → slot ${n}]`;
     }
     return '[written]';
   });
@@ -206,7 +206,7 @@ test('credits: makers are read off the law\'s makers: line, and split to the cen
 });
 
 test('credits: a book read in order across a supernest, and a gift found under a nested slot', () => {
-  const l = (id: string, to: string) => ({ _: id, '1': id, '2': 1, '3': to, '6': 'x' });
+  const l = (id: string, to: string) => ({ _: id, '1': id, '2': 1, '3': '2026-11-25T17:00:00Z', '5': to, '6': 'x' });
   const book = { _: { _: { _: 'book', '1': l('a', 'p'), '2': l('b', 'p') }, '1': { _: '', '1': l('c', 'p') } }, '1': { _: '', '1': { _: '', '1': l('d', 'p') } } };
   assert.deepEqual(linesOf(book).map((x) => x.id), ['a', 'b', 'c', 'd']);
   const passport = { _: 'p', '6': { _: 'acc', '3': { _: 'gifts', '1': { _: 'g', '1': 'p1', '2': 1, '3': 'function:migration' }, '2': { _: 'g', '1': 'p2', '2': 2, '3': 'ben' } } } };
@@ -231,4 +231,15 @@ test('credits: the success page of a credit ticket says where the credits go and
   const html = await r.text();
   assert.match(html, /written into the book/);
   assert.match(html, /href="https:\/\/happyseaurchin.com\/games\/migration"/);
+});
+
+test('credits: a product read as JSON carries its issuer and credit terms, for the page that offers it', async () => {
+  const s = setup();
+  const r = await s.app.request('/share/migration-goes', { headers: { accept: 'application/json' } });
+  const body = (await r.json()) as { issuer: string; credits: { to: string; free: number; go: number } };
+  assert.equal(body.issuer, 'arcade-credits');
+  assert.equal(r.headers.get('access-control-allow-origin'), '*', 'a page on another origin reads a product\'s terms');
+  assert.deepEqual([body.credits.to, body.credits.free, body.credits.go], ['pool', 3, 1]);
+  const plain = await s.app.request('/share/character-30d', { headers: { accept: 'application/json' } });
+  assert.equal(((await plain.json()) as { credits?: unknown }).credits, undefined);
 });

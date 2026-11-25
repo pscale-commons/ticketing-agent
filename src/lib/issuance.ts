@@ -257,7 +257,7 @@ async function appendToList(
       content: { _: `${product.title ?? product.id} — each entry below is one, in the order they arrived: the name it was bought for, the date, and a line of the buyer's own if they left one; never the amount. Written by the ticket machine alone, under its own key.` },
     }).catch(() => '');
     const text = await ctx.mcp.callTool('bsp', { agent_id: beach, block, append: true, content: { _: declaration }, secret: key });
-    const m = /→\s*([0-9.]+)/.exec(text);
+    const m = /→\s*(?:slot\s*)?([0-9.]+)/.exec(text);   // the beach answers '→ slot 1', an older router '→ 1'
     if (!m) throw new Error(text.slice(0, 200));
     ctx.log.info({ purchase_id, product_id: product.id, buyer, address: `${block}:${m[1]}` }, 'buyer written onto the list');
     return `${block}:${m[1]}`;

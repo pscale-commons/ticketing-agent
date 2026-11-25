@@ -338,7 +338,11 @@ export function purchaseRoutes(ctx: AppContext): Hono {
         description: product.description,
         ...(product.title ? { title: product.title } : {}),
         driver: product.price.driver,
-      });
+        // a credit-bearing product's terms, for the page that offers it: whose
+        // book its credits are kept in, and what they do (README, Credits)
+        ...(product.credits ? { issuer: product.issuer ?? bareId(ctx.config.agent.id), credits: product.credits } : {}),
+      // a product's terms are public: a page on another origin (a game's frame) reads them to offer it
+      }, 200, { 'Access-Control-Allow-Origin': '*' });
     }
     return c.html(renderBuyForm(product, ctx.config.agent.beach ?? DEFAULT_BEACH));
   });
