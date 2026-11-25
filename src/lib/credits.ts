@@ -18,7 +18,8 @@
 // way round: the book is an accumulator, and the beach's accumulator law makes
 // an appended entry's 3 its time, stamping any 3 that is not one (ways of the
 // beach, pscale-beach stampAppendTimestamp: 'position 3 authoritative for recency').
-//   _  what moved, to whom and why, in words (a payer of a fund or a point is never named)
+//   _  what moved, to whom and why, in words (a payer of a fund or a point is never named in
+//      them; the grain in 6 still names the buyer to anyone who tests a handle — README)
 //   1  the move's id: a purchase, the holder's gift (its probe id), or a free go
 //   2  the credits it moves
 //   3  when it was written
@@ -145,11 +146,12 @@ export function equally(n: number, handles: string[]): Array<{ to: string; n: nu
 
 // A split as an address answers it, { split: { <handle>: share } }, shares
 // summing to anything: contract types two and three read a family's XP there.
-// The address may ask for what it needs to split by: {credits}, {buyer} and
-// {at} (the moment paid) are filled in, each encoded; a quiet buyer's product
-// leaves {buyer} out of its address.
-export function splitAddress(url: string, fill: { credits: number; buyer: string; at: string }): string {
-  return url.replace(/\{(credits|buyer|at)\}/g, (_, k: 'credits' | 'buyer' | 'at') => encodeURIComponent(String(fill[k])));
+// The address may ask for what it needs to split by: {credits} (or {n}),
+// {buyer}, {at} (the moment paid) and {id} (the purchase) are filled in, each
+// encoded; a quiet buyer's product leaves {buyer} out of its address.
+export function splitAddress(url: string, fill: { credits: number; buyer: string; at: string; id?: string }): string {
+  const v: Record<string, string> = { credits: String(fill.credits), n: String(fill.credits), buyer: fill.buyer, at: fill.at, id: fill.id ?? '' };
+  return url.replace(/\{(credits|n|buyer|at|id)\}/g, (_, k: string) => encodeURIComponent(v[k] ?? ''));
 }
 
 async function fetchedSplit(url: string, n: number): Promise<Array<{ to: string; n: number }>> {
@@ -271,7 +273,7 @@ export async function mintAtPayment(
         if (!to.length) throw new Error(`function:${point} names no makers`);
         words = (r) => `${r.n} of ${n} credits to ${r.to}, a maker of ${point} (split equally), from a ticket '${title}' paid ${today(now)}`;
       } else if (c.to.startsWith('https://')) {
-        const url = splitAddress(c.to, { credits: n, buyer, at: now.toISOString() });
+        const url = splitAddress(c.to, { credits: n, buyer, at: now.toISOString(), id: purchase_id });
         to = await fetchedSplit(url, n);
         words = (r) => `${r.n} of ${n} credits to ${r.to}, by the split at ${c.to.split('?')[0]} read ${now.toISOString()}, from a ticket '${title}' paid ${today(now)}`;
       } else {

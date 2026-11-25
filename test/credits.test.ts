@@ -267,6 +267,7 @@ test('credits: a split address is filled with the credits, the buyer and the mom
     splitAddress('https://x.test/api/xp?family=o&credits={credits}&buyer={buyer}&at={at}', { credits: 1000, buyer: 'Ana B', at: '2026-11-25T17:00:00Z' }),
     'https://x.test/api/xp?family=o&credits=1000&buyer=Ana%20B&at=2026-11-25T17%3A00%3A00Z',
   );
+  assert.equal(splitAddress('https://x.test/s?n={n}&id={id}', { credits: 7, buyer: 'b', at: 'a', id: 'p-1' }), 'https://x.test/s?n=7&id=p-1');
   const SUPPORT: Product = {
     id: 'support', title: 'Support a phase', issuer: 'arcade-credits', sed: 'sed:arcade-credits', face: 'character',
     scope: 'frame:o', duration_days: 36500, description: 'Support.', price: { driver: 'stripe', stripe_price_id: 'price_s' },
@@ -292,4 +293,14 @@ test('credits: config takes n or per_pound, never both and never neither', () =>
   assert.throws(() => loadConfig(join(dir, 'neither.yaml')), /n, or per_pound/);
   writeFileSync(join(dir, 'ok.yaml'), p('{ per_pound: 1000, to: commons }'));
   assert.equal(loadConfig(join(dir, 'ok.yaml')).products[0]!.credits!.per_pound, 1000);
+});
+
+test('credits: the success page fills {purchase} in a product\'s back address, so the page can show the buyer their own record', async () => {
+  const MINE: Product = { ...OWN, id: 'own-back', back: 'https://happyseaurchin.com/o-page-unit?purchase={purchase}' };
+  const s = setup([...TEST_PRODUCTS, MINE]);
+  const id = '3996175c-879e-4a1c-9cd5-c5bd6b212557';
+  const ok = await (await s.app.request(`/share/own-back/success?purchase=${id}`)).text();
+  assert.match(ok, new RegExp(`href="https://happyseaurchin.com/o-page-unit\\?purchase=${id}"`));
+  const odd = await (await s.app.request('/share/own-back/success?purchase=<script>')).text();
+  assert.match(odd, /href="https:\/\/happyseaurchin.com\/o-page-unit\?purchase="/, 'anything but a purchase id is left out');
 });

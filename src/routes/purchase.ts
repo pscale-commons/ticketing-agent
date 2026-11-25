@@ -393,6 +393,10 @@ export function purchaseRoutes(ctx: AppContext): Hono {
   app.get('/:door{share|buy}/:id/success', (c) => {
     const product = findProduct(ctx, c.req.param('id'));
     if (!product) return c.json({ error: 'unknown_product' }, 404);
+    // a page that offered the ticket may show the buyer their own record:
+    // {purchase} in its back address is this purchase's id
+    const purchase = /^[0-9a-f-]{36}$/.test(c.req.query('purchase') ?? '') ? c.req.query('purchase')! : '';
+    const back = product.back ? product.back.replace(/\{purchase\}/g, purchase) : '';
     return c.html(
       renderStatus(
         'Payment received',
@@ -404,7 +408,7 @@ export function purchaseRoutes(ctx: AppContext): Hono {
           ? 'Thanks. Your credits are written into the book as the payment lands, a moment from now.'
           : 'Thanks. Your ticket grain will arrive on the substrate shortly. You can close this tab.',
         product.id,
-        product.back ? { url: product.back, label: 'back to where you came from' } : undefined,
+        back ? { url: back, label: 'back to where you came from' } : undefined,
       ),
     );
   });
@@ -412,7 +416,7 @@ export function purchaseRoutes(ctx: AppContext): Hono {
   app.get('/:door{share|buy}/:id/cancel', (c) => {
     const product = findProduct(ctx, c.req.param('id'));
     if (!product) return c.json({ error: 'unknown_product' }, 404);
-    return c.html(renderStatus('Payment cancelled', 'No charge was made.', product.id, product.back ? { url: product.back, label: 'back to where you came from' } : undefined));
+    return c.html(renderStatus('Payment cancelled', 'No charge was made.', product.id, product.back ? { url: product.back.replace(/\{purchase\}/g, ''), label: 'back to where you came from' } : undefined));
   });
 
   return app;

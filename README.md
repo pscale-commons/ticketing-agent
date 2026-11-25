@@ -182,12 +182,14 @@ credits:
 - `to: buyer` — the buyer's own credits.
 - `to: pool` — a fund for others' goes: nothing reaches a person until someone draws a free go (`POST /credits/draw`), which moves `go` credits to the point's makers, split equally, at most `free` a handle.
 - `to: makers:<point>` — straight to the makers the point's law names, split equally (contract type one, point-creators).
-- `to: https://…` — split as that address answers, `{ "split": { "<handle>": share, … } }` (contract types two and three: a family's XP, the ecosystem's). `{credits}`, `{buyer}` and `{at}` in the address are filled in with the credits, the buyer and the moment paid; a quiet buyer's product leaves `{buyer}` out.
+- `to: https://…` — split as that address answers, `{ "split": { "<handle>": share, … } }` (contract types two and three: a family's XP, the ecosystem's). `{credits}` (or `{n}`), `{buyer}`, `{at}` and `{id}` in the address are filled in with the credits, the buyer, the moment paid and the purchase; a quiet buyer's product leaves `{buyer}` out.
 - `to: <handle>` — straight to one holder named here (the commons, say).
 
 A holder moves their own credits by writing a gift at their passport's 6.3 (sand-v2 3.1: `{_, 1: probe id, 2: n, 3: to, 5: when}`, `to` a handle or `function:<point>` for a go of that point) and asking `POST /credits/spend`; the machine moves it only as far as the book says they hold, once, and in order with every other move. Each line of the book is a gift in sand-v2's shape with its time and recipient swapped, since the book is an accumulator and the beach's accumulator law makes an appended entry's `3` its time: `1` the move's id, `2` n, `3` when, `4` the point, `5` to, `6` from (`grain:<pair_id>`, `fund:<product>` or a handle), `7` its warrant (`ticket <purchase id>`, the handle a free go was for, or `passport:<holder> 6.3<slot>`).
 
-`back:` on a product puts a link back to the page the buyer came from on the success page.
+`back:` on a product puts a link back to the page the buyer came from on the success page; `{purchase}` in it is filled with the purchase's id, so that page can show the buyer their own record.
+
+**Who a line names.** A line's words never name who paid for a fund or a point, but its `from`, `grain:<pair_id>`, is the hash of the issuer and the buyer, which anyone can test against a handle, as the ticket's own envelope (`nonce=` the purchase) can be. A buyer who is not to be named at all buys in a handle of the fund's own (no colon: grain reach takes a bare handle), so the grain stands with the fund and never with the person.
 
 ## Driver flows
 
